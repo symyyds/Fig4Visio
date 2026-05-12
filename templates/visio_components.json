@@ -1,0 +1,453 @@
+{
+  "version": "0.1",
+  "node_types": {
+    "process_box": {
+      "renderer": "visio_master",
+      "master": "Process",
+      "fallback_renderer": "rectangle",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 16,
+        "line_dash": "solid"
+      }
+    },
+    "rounded_process": {
+      "renderer": "rounded_rectangle",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 16,
+        "line_dash": "solid",
+        "rounding_in": 0.12
+      }
+    },
+    "stacked_process": {
+      "renderer": "stacked_process",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 16,
+        "line_dash": "solid",
+        "rounding_in": 0.08,
+        "layers": 4,
+        "stack_dx_in": -0.04,
+        "stack_dy_in": 0.035
+      }
+    },
+    "stacked_token": {
+      "renderer": "stacked_process",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.0,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 13,
+        "line_dash": "solid",
+        "rounding_in": 0.04,
+        "layers": 5,
+        "stack_dx_in": -0.035,
+        "stack_dy_in": 0.028
+      }
+    },
+    "notched_block": {
+      "renderer": "notched_block",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.0,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "solid",
+        "rounding_in": 0.0,
+        "notch_fill": "#FFFFFF"
+      }
+    },
+    "feature_map_banded": {
+      "renderer": "feature_map_banded",
+      "default_style": {
+        "fill": "none",
+        "line": "#C7C7C7",
+        "line_weight_pt": 0.6,
+        "line_dash": "solid",
+        "font_family": "Times New Roman",
+        "font_size_pt": 1
+      }
+    },
+    "feature_map_grid": {
+      "renderer": "feature_map_grid",
+      "default_style": {
+        "fill": "none",
+        "line": "#111111",
+        "line_weight_pt": 0.9,
+        "line_dash": "solid",
+        "grid_line": "#333333",
+        "grid_line_weight_pt": 0.35,
+        "grid_line_transparency_pct": 35,
+        "outline": "#111111",
+        "outline_weight_pt": 0.9,
+        "shade_color": "#111111",
+        "max_shade": 0.58,
+        "row_colors": [
+          "#F2A66F",
+          "#A8D7E5",
+          "#C8D9C2",
+          "#F3E889",
+          "#9BC6D9",
+          "#F2A66F"
+        ]
+      }
+    },
+    "merge_bus": {
+      "renderer": "merge_bus",
+      "default_style": {
+        "fill": "none",
+        "line": "#555555",
+        "line_weight_pt": 0.9,
+        "line_dash": "solid",
+        "port_length_in": 0.18
+      }
+    },
+    "decision_diamond": {
+      "renderer": "visio_master",
+      "master": "Decision",
+      "fallback_renderer": "diamond",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "solid"
+      }
+    },
+    "terminator": {
+      "renderer": "visio_master",
+      "master": "Start/End",
+      "fallback_renderer": "terminator",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 16,
+        "line_dash": "solid",
+        "rounding_in": 0.22
+      }
+    },
+    "group_container": {
+      "renderer": "group_container",
+      "default_style": {
+        "fill": "none",
+        "line": "#CBD5E1",
+        "line_weight_pt": 1.0,
+        "text_color": "#334155",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "dash",
+        "rounding_in": 0.0
+      }
+    },
+    "audit_region": {
+      "renderer": "audit_region",
+      "default_style": {
+        "fill": "none",
+        "line": "none",
+        "line_weight_pt": 0,
+        "text_color": "#334155",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 1,
+        "line_dash": "solid"
+      }
+    },
+    "text_pill": {
+      "renderer": "pill",
+      "default_style": {
+        "fill": "#F8FAFC",
+        "line": "#CBD5E1",
+        "line_weight_pt": 1.0,
+        "text_color": "#0F172A",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 13,
+        "line_dash": "solid",
+        "rounding_in": 0.18
+      }
+    },
+    "ellipse_node": {
+      "renderer": "oval",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.25,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "solid"
+      }
+    },
+    "operator_node": {
+      "renderer": "operator_node",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.15,
+        "text_color": "#111827",
+        "font_family": "Cambria Math",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "solid",
+        "enforce_circle": true,
+        "symbol_font_family": "Cambria Math",
+        "symbol_inset_in": 0.0
+      }
+    },
+    "boundary_port": {
+      "renderer": "boundary_port",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 0.8,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 8,
+        "line_dash": "solid"
+      }
+    },
+    "wave_signal": {
+      "renderer": "wave_signal",
+      "default_style": {
+        "fill": "none",
+        "line": "#111827",
+        "line_weight_pt": 1.1,
+        "line_dash": "solid",
+        "end_arrow": "none",
+        "amplitude_ratio": 0.38,
+        "cycles": 2.5
+      }
+    },
+    "classifier_head": {
+      "renderer": "classifier_head",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#111827",
+        "line_weight_pt": 1.0,
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 11,
+        "line_dash": "solid",
+        "rounding_in": 0.06,
+        "block_gap_in": 0.08,
+        "vertical_block_gap_in": 0.18,
+        "padding_in": 0.04,
+        "internal_arrow_size": "tiny"
+      }
+    },
+    "boundary_fanout": {
+      "renderer": "boundary_fanout",
+      "default_style": {
+        "fill": "none",
+        "line": "#111827",
+        "line_weight_pt": 1.0,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "branch_count": 4,
+        "branch_length_in": 0.55,
+        "arrow_gap_in": 0.04
+      }
+    },
+    "text_block": {
+      "renderer": "text_block",
+      "default_style": {
+        "fill": "none",
+        "line": "none",
+        "text_color": "#111827",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 15,
+        "line_dash": "solid"
+      }
+    },
+    "grid_matrix": {
+      "renderer": "grid_matrix",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "cell_fill": "#FFFFFF",
+        "active_fill": "#2F7F91",
+        "line": "#000000",
+        "grid_line": "#000000",
+        "line_weight_pt": 1.0,
+        "grid_line_weight_pt": 1.0,
+        "line_dash": "solid"
+      }
+    },
+    "bracket": {
+      "renderer": "bracket",
+      "default_style": {
+        "fill": "none",
+        "line": "#333333",
+        "line_weight_pt": 1.1,
+        "line_dash": "solid"
+      }
+    },
+    "junction_point": {
+      "renderer": "junction_point",
+      "default_style": {
+        "fill": "none",
+        "line": "none",
+        "line_weight_pt": 0,
+        "line_dash": "solid"
+      }
+    },
+    "image_tile": {
+      "renderer": "image_tile",
+      "default_style": {
+        "line": "#CBD5E1",
+        "line_weight_pt": 0.75
+      }
+    },
+    "legend_block": {
+      "renderer": "legend_block",
+      "default_style": {
+        "fill": "#FFFFFF",
+        "line": "#CBD5E1",
+        "line_weight_pt": 1.0,
+        "text_color": "#334155",
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "font_size_pt": 13,
+        "line_dash": "solid"
+      }
+    }
+  },
+  "edge_types": {
+    "arrow_connector": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#64748B",
+        "line_weight_pt": 1.25,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "auto",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "dynamic_connector": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#64748B",
+        "line_weight_pt": 1.25,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "auto",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "residual_connector": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#555555",
+        "line_weight_pt": 0.9,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "orthogonal",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "line_segment": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#333333",
+        "line_weight_pt": 1.0,
+        "line_dash": "solid",
+        "end_arrow": "none",
+        "route": "straight",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "join_connector": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#333333",
+        "line_weight_pt": 1.0,
+        "line_dash": "solid",
+        "end_arrow": "none",
+        "route": "auto",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "fork_connector": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#333333",
+        "line_weight_pt": 1.0,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "auto",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "boundary_arrow": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#333333",
+        "line_weight_pt": 1.0,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "horizontal",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    },
+    "residual_loop": {
+      "renderer": "straight_line",
+      "default_style": {
+        "line": "#555555",
+        "line_weight_pt": 0.9,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "orthogonal",
+        "snap_tolerance_in": 0.18,
+        "axis_snap_in": 0.03
+      }
+    }
+  }
+}

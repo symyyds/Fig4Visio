@@ -1,0 +1,320 @@
+{
+  "version": "0.1",
+  "default_profile": "paper_white",
+  "profiles": {
+    "paper_white": {
+      "global_text": {
+        "font_family": "Times New Roman",
+        "font_weight": "regular",
+        "text_color": "#000000"
+      },
+      "global_edge": {
+        "line": "#000000",
+        "line_weight_pt": 1.25,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "auto",
+        "snap_tolerance_in": 0.2,
+        "axis_snap_in": 0.03
+      },
+      "node_types": {
+        "group_container": {
+          "line": "#000000",
+          "line_weight_pt": 1.25,
+          "line_dash": "dash",
+          "rounding_in": 0.0
+        },
+        "audit_region": {
+          "fill": "none",
+          "line": "none",
+          "line_weight_pt": 0
+        },
+        "rounded_process": {
+          "line": "#B8B8B8",
+          "line_weight_pt": 1.15,
+          "rounding_in": 0.16
+        },
+        "stacked_process": {
+          "line_weight_pt": 0.8,
+          "rounding_in": 0.06,
+          "layers": 4,
+          "stack_dx_in": -0.04,
+          "stack_dy_in": 0.035
+        },
+        "stacked_token": {
+          "line_weight_pt": 0.75,
+          "rounding_in": 0.04,
+          "layers": 5,
+          "stack_dx_in": -0.035,
+          "stack_dy_in": 0.028
+        },
+        "notched_block": {
+          "line_weight_pt": 0.8,
+          "notch_fill": "#FFFFFF"
+        },
+        "feature_map_banded": {
+          "line": "#C7C7C7",
+          "line_weight_pt": 0.55
+        },
+        "feature_map_grid": {
+          "line": "#111111",
+          "line_weight_pt": 0.9,
+          "grid_line": "#333333",
+          "grid_line_weight_pt": 0.35,
+          "grid_line_transparency_pct": 35,
+          "max_shade": 0.58
+        },
+        "merge_bus": {
+          "line": "#555555",
+          "line_weight_pt": 0.8
+        },
+        "text_block": {
+          "font_size_pt": 16
+        },
+        "ellipse_node": {
+          "line": "#000000",
+          "line_weight_pt": 1.2
+        },
+        "operator_node": {
+          "line": "#000000",
+          "line_weight_pt": 1.15,
+          "font_size_pt": 15,
+          "symbol_font_family": "Cambria Math",
+          "enforce_circle": true
+        },
+        "boundary_port": {
+          "line": "#000000",
+          "line_weight_pt": 0.8
+        },
+        "wave_signal": {
+          "line": "#000000",
+          "line_weight_pt": 1.1
+        },
+        "classifier_head": {
+          "line": "#000000",
+          "line_weight_pt": 1.0,
+          "font_size_pt": 11,
+          "internal_arrow_size": "tiny"
+        },
+        "boundary_fanout": {
+          "line": "#000000",
+          "line_weight_pt": 1.0,
+          "arrow_size": "small"
+        },
+        "grid_matrix": {
+          "cell_fill": "#FFFFFF",
+          "active_fill": "#2F7F91",
+          "grid_line": "#000000",
+          "grid_line_weight_pt": 1.0
+        },
+        "bracket": {
+          "line": "#333333",
+          "line_weight_pt": 1.1
+        },
+        "junction_point": {
+          "fill": "none",
+          "line": "none"
+        }
+      },
+      "edge_types": {
+        "arrow_connector": {
+          "line": "#000000",
+          "line_weight_pt": 1.35
+        },
+        "line_segment": {
+          "line": "#000000",
+          "line_weight_pt": 1.0,
+          "end_arrow": "none"
+        },
+        "residual_connector": {
+          "line": "#555555",
+          "line_weight_pt": 0.9
+        },
+        "join_connector": {
+          "line": "#000000",
+          "line_weight_pt": 1.0,
+          "end_arrow": "none"
+        },
+        "fork_connector": {
+          "line": "#000000",
+          "line_weight_pt": 1.0
+        },
+        "boundary_arrow": {
+          "line": "#000000",
+          "line_weight_pt": 1.0,
+          "arrow_size": "small"
+        },
+        "residual_loop": {
+          "line": "#555555",
+          "line_weight_pt": 0.9
+        }
+      }
+    },
+    "clean_white": {
+      "global_text": {
+        "font_family": "Microsoft YaHei UI",
+        "font_weight": "regular",
+        "text_color": "#0F172A"
+      },
+      "global_edge": {
+        "line": "#334155",
+        "line_weight_pt": 1.35,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "auto",
+        "snap_tolerance_in": 0.2,
+        "axis_snap_in": 0.03
+      },
+      "node_types": {
+        "process_box": {
+          "fill": "#FFFFFF",
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "shadow": {
+            "color": "#0F172A",
+            "offset_x_in": 0.035,
+            "offset_y_in": -0.035,
+            "transparency_pct": 86
+          }
+        },
+        "rounded_process": {
+          "fill": "#FFFFFF",
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "rounding_in": 0.12,
+          "shadow": {
+            "color": "#0F172A",
+            "offset_x_in": 0.035,
+            "offset_y_in": -0.035,
+            "transparency_pct": 86
+          }
+        },
+        "stacked_process": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "rounding_in": 0.08,
+          "layers": 4,
+          "stack_dx_in": -0.04,
+          "stack_dy_in": 0.035,
+          "shadow": {
+            "color": "#0F172A",
+            "offset_x_in": 0.035,
+            "offset_y_in": -0.035,
+            "transparency_pct": 86
+          }
+        },
+        "stacked_token": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 0.9,
+          "rounding_in": 0.05,
+          "layers": 5,
+          "stack_dx_in": -0.035,
+          "stack_dy_in": 0.028
+        },
+        "notched_block": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "notch_fill": "#FFFFFF"
+        },
+        "feature_map_banded": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 0.7
+        },
+        "feature_map_grid": {
+          "line": "#334155",
+          "line_weight_pt": 0.85,
+          "grid_line": "#334155",
+          "grid_line_weight_pt": 0.3,
+          "grid_line_transparency_pct": 45,
+          "max_shade": 0.48
+        },
+        "merge_bus": {
+          "line": "#475569",
+          "line_weight_pt": 1.0
+        },
+        "operator_node": {
+          "line": "#334155",
+          "line_weight_pt": 1.1,
+          "font_size_pt": 14,
+          "symbol_font_family": "Cambria Math",
+          "enforce_circle": true
+        },
+        "boundary_port": {
+          "fill": "#FFFFFF",
+          "line": "#475569",
+          "line_weight_pt": 0.8
+        },
+        "wave_signal": {
+          "line": "#334155",
+          "line_weight_pt": 1.1
+        },
+        "classifier_head": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "font_size_pt": 10,
+          "rounding_in": 0.05,
+          "internal_arrow_size": "tiny"
+        },
+        "boundary_fanout": {
+          "line": "#475569",
+          "line_weight_pt": 1.0,
+          "arrow_size": "small"
+        },
+        "group_container": {
+          "line": "#CBD5E1",
+          "line_weight_pt": 1.0,
+          "line_dash": "dash",
+          "rounding_in": 0.0
+        },
+        "audit_region": {
+          "fill": "none",
+          "line": "none",
+          "line_weight_pt": 0
+        },
+        "bracket": {
+          "line": "#475569",
+          "line_weight_pt": 1.1
+        },
+        "junction_point": {
+          "fill": "none",
+          "line": "none"
+        }
+      },
+      "edge_types": {
+        "arrow_connector": {
+          "line": "#475569",
+          "line_weight_pt": 1.35
+        },
+        "line_segment": {
+          "line": "#475569",
+          "line_weight_pt": 1.0,
+          "end_arrow": "none"
+        },
+        "residual_connector": {
+          "line": "#475569",
+          "line_weight_pt": 1.1
+        },
+        "join_connector": {
+          "line": "#475569",
+          "line_weight_pt": 1.0,
+          "end_arrow": "none"
+        },
+        "fork_connector": {
+          "line": "#475569",
+          "line_weight_pt": 1.0
+        },
+        "boundary_arrow": {
+          "line": "#475569",
+          "line_weight_pt": 1.0,
+          "arrow_size": "small"
+        },
+        "residual_loop": {
+          "line": "#475569",
+          "line_weight_pt": 1.1
+        }
+      }
+    }
+  }
+}
