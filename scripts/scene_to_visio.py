@@ -6,8 +6,14 @@ import copy
 import json
 import math
 import os
+import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+from font_utils import font_resolution_for_style
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -80,6 +86,18 @@ def normalize_scene_coordinates(scene: dict[str, Any]) -> dict[str, Any]:
             node["y"] = float(node["y"]) * sy
             node["w"] = float(node["w"]) * sx
             node["h"] = float(node["h"]) * sy
+        for key in ("grid_x",):
+            if key in node:
+                node[key] = scale_nested_relative_or_absolute(node[key], sx)
+        for key in ("grid_y", "input_y"):
+            if key in node:
+                node[key] = scale_nested_relative_or_absolute(node[key], sy)
+        for key in ("grid_w",):
+            if key in node:
+                node[key] = scale_nested_relative_or_absolute(node[key], sx)
+        for key in ("grid_h",):
+            if key in node:
+                node[key] = scale_nested_relative_or_absolute(node[key], sy)
         for collection_key in ("notches", "overlays", "vertical_bands"):
             for item in node.get(collection_key, []) or []:
                 if not isinstance(item, dict):
@@ -92,11 +110,18 @@ def normalize_scene_coordinates(scene: dict[str, Any]) -> dict[str, Any]:
                         item[key] = scale_nested_relative_or_absolute(item[key], sy)
 
     for edge in normalized.get("edges", []):
-        for key in ("from_point", "to_point"):
+        for key in ("from_point", "to_point", "start_tangent_point", "end_tangent_point"):
             if key in edge:
                 edge[key] = scale_point(edge[key], sx, sy)
         if edge.get("points"):
             edge["points"] = [scale_point(point, sx, sy) for point in edge["points"]]
+        if isinstance(edge.get("bbox"), list) and len(edge["bbox"]) == 4:
+            edge["bbox"] = [
+                float(edge["bbox"][0]) * sx,
+                float(edge["bbox"][1]) * sy,
+                float(edge["bbox"][2]) * sx,
+                float(edge["bbox"][3]) * sy,
+            ]
 
     metadata = normalized.setdefault("metadata", {})
     metadata["normalized_from_units"] = "px"
@@ -214,13 +239,31 @@ def node_id_from_endpoint(endpoint: str) -> str:
     return endpoint.split(":", 1)[0]
 
 
-def edge_point(edge: dict[str, Any], endpoint_name: str) -> tuple[float, float] | None:
-    value = edge.get(f"{endpoint_name}_point")
+def point_from_value(value: Any, description: str) -> tuple[float, float] | None:
     if value is None:
         return None
     if not isinstance(value, list) or len(value) != 2:
-        raise ValueError(f"Edge `{edge.get('id', '<unknown>')}` {endpoint_name}_point must be [x, y].")
+        raise ValueError(f"{description} must be [x, y].")
     return float(value[0]), float(value[1])
+
+
+def edge_point(edge: dict[str, Any], endpoint_name: str) -> tuple[float, float] | None:
+    return point_from_value(
+        edge.get(f"{endpoint_name}_point"),
+        f"Edge `{edge.get('id', '<unknown>')}` {endpoint_name}_point",
+    )
+
+
+def edge_named_point(edge: dict[str, Any], key: str) -> tuple[float, float] | None:
+    return point_from_value(edge.get(key), f"Edge `{edge.get('id', '<unknown>')}` {key}")
+
+
+def append_distinct_point(points: list[tuple[float, float]], point: tuple[float, float] | None) -> None:
+    if point is None:
+        return
+    if points and math.hypot(points[-1][0] - point[0], points[-1][1] - point[1]) <= 1e-9:
+        return
+    points.append(point)
 
 
 def fake_node_at(point: tuple[float, float]) -> dict[str, float]:
@@ -273,6 +316,46 @@ def try_set_text(shape: Any, text: str) -> None:
         return
 
 
+def text_width_factor(char: str) -> float:
+    if char.isspace():
+        return 0.32
+    if ord(char) > 255:
+        return 0.92
+    if char in "ilI.,'`|":
+        return 0.28
+    if char in "MW@#%&":
+        return 0.78
+    return 0.54
+
+
+def approximate_text_width(text: str, font_size_pt: float) -> float:
+    return sum(text_width_factor(char) for char in str(text)) * font_size_pt / 72.0
+
+
+def normalize_loss_formula_text(text: str) -> str:
+    text = str(text)
+
+    def replace_loss(match: re.Match[str]) -> str:
+        return f"L_{match.group(1).lower()}"
+
+    return re.sub(r"\bL\s*_?\s*(adv|rec)\b", replace_loss, text, flags=re.IGNORECASE)
+
+
+def parse_math_text_line(line: str) -> list[dict[str, Any]]:
+    line = normalize_loss_formula_text(line)
+    fragments: list[dict[str, Any]] = []
+    cursor = 0
+    for match in re.finditer(r"([A-Za-z])_([A-Za-z0-9]+)", line):
+        if match.start() > cursor:
+            fragments.append({"text": line[cursor : match.start()], "subscript": False})
+        fragments.append({"text": match.group(1), "subscript": False})
+        fragments.append({"text": match.group(2), "subscript": True})
+        cursor = match.end()
+    if cursor < len(line):
+        fragments.append({"text": line[cursor:], "subscript": False})
+    return [fragment for fragment in fragments if fragment.get("text")]
+
+
 def arrow_size_value(value: Any, segment_length: float | None = None) -> int:
     if isinstance(value, (int, float)):
         return max(0, min(6, int(value)))
@@ -322,7 +405,7 @@ def apply_shadow(shape: Any, shadow: dict[str, Any] | bool | None) -> None:
     try_set_formula(shape, "ShdwForegndTrans", f"{float(transparency)}%")
 
 
-def apply_style(shape: Any, style: dict[str, Any]) -> None:
+def apply_style(shape: Any, style: dict[str, Any], text: Any = "") -> None:
     fill = style.get("fill")
     if fill == "none":
         try_set_result(shape, "FillPattern", 0)
@@ -350,12 +433,13 @@ def apply_style(shape: Any, style: dict[str, Any]) -> None:
         try_set_formula(shape, "LineWeight", f"{float(line_weight)} pt")
 
     line_dash = style.get("line_dash")
-    if line_dash == "dash":
-        try_set_result(shape, "LinePattern", 2)
-    elif line_dash == "dot":
-        try_set_result(shape, "LinePattern", 3)
-    elif line_dash == "long_dash":
-        try_set_result(shape, "LinePattern", 7)
+    if line != "none":
+        if line_dash == "dash":
+            try_set_result(shape, "LinePattern", 2)
+        elif line_dash == "dot":
+            try_set_result(shape, "LinePattern", 3)
+        elif line_dash == "long_dash":
+            try_set_result(shape, "LinePattern", 7)
 
     rounding = style.get("rounding_in")
     if rounding is not None:
@@ -369,7 +453,8 @@ def apply_style(shape: Any, style: dict[str, Any]) -> None:
     if font_size is not None:
         try_set_formula(shape, "Char.Size", f"{float(font_size)} pt")
 
-    font_family = style.get("font_family")
+    font_resolution = font_resolution_for_style(style, text)
+    font_family = font_resolution.resolved or style.get("font_family")
     if font_family:
         try_set_formula(shape, "Char.Font", f'FONT("{font_family}")')
 
@@ -389,6 +474,15 @@ def apply_style(shape: Any, style: dict[str, Any]) -> None:
 
     try_set_result(shape, "Para.HorzAlign", int(style.get("text_align", 1)))
     try_set_result(shape, "VerticalAlign", int(style.get("vertical_align", 1)))
+    margin_cells = {
+        "TxtMarginLeft": style.get("text_margin_left_in", style.get("text_margin_in")),
+        "TxtMarginRight": style.get("text_margin_right_in", style.get("text_margin_in")),
+        "TxtMarginTop": style.get("text_margin_top_in", style.get("text_margin_in")),
+        "TxtMarginBottom": style.get("text_margin_bottom_in", style.get("text_margin_in")),
+    }
+    for cell_name, margin in margin_cells.items():
+        if margin is not None:
+            try_set_formula(shape, cell_name, f"{float(margin)} in")
     apply_shadow(shape, style.get("shadow"))
 
 
@@ -398,6 +492,240 @@ def draw_rectangle(page: Any, page_height: float, node: dict[str, Any]) -> Any:
     x2 = float(node["x"]) + float(node["w"])
     y2 = to_visio_y(page_height, float(node["y"]))
     return page.DrawRectangle(x1, y1, x2, y2)
+
+
+def draw_visio_polyline(page: Any, values: list[float], tolerance: float = 0.0) -> Any:
+    last_error: Exception | None = None
+    for args in ((values, tolerance, 0), (values, tolerance), (values,)):
+        try:
+            return page.DrawPolyline(*args)
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("DrawPolyline failed without an exception.")
+
+
+def draw_visio_bezier(page: Any, values: list[float], tolerance: float = 0.0) -> Any:
+    last_error: Exception | None = None
+    for args in ((values, tolerance, 0), (values, tolerance), (values,)):
+        try:
+            return page.DrawBezier(*args)
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("DrawBezier failed without an exception.")
+
+
+def catmull_rom_points(points: list[tuple[float, float]], samples_per_segment: int = 10) -> list[tuple[float, float]]:
+    if len(points) < 4:
+        return points
+    smoothed: list[tuple[float, float]] = []
+    for index in range(len(points) - 1):
+        p0 = points[max(0, index - 1)]
+        p1 = points[index]
+        p2 = points[index + 1]
+        p3 = points[min(len(points) - 1, index + 2)]
+        if index == 0:
+            smoothed.append(p1)
+        for step in range(1, samples_per_segment + 1):
+            t = step / samples_per_segment
+            t2 = t * t
+            t3 = t2 * t
+            x = 0.5 * (
+                (2 * p1[0])
+                + (-p0[0] + p2[0]) * t
+                + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+                + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+            )
+            y = 0.5 * (
+                (2 * p1[1])
+                + (-p0[1] + p2[1]) * t
+                + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+                + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+            )
+            smoothed.append((x, y))
+    return smoothed
+
+
+def draw_polygon_from_points(page: Any, page_height: float, points: list[tuple[float, float]]) -> Any:
+    if len(points) < 3:
+        raise ValueError("polygon nodes require at least three points.")
+
+    closed_points = [*points]
+    if closed_points[0] != closed_points[-1]:
+        closed_points.append(closed_points[0])
+
+    values: list[float] = []
+    for x, y in closed_points:
+        values.extend([float(x), to_visio_y(page_height, float(y))])
+
+    try:
+        return draw_visio_polyline(page, values, 0.0)
+    except Exception:
+        first_shape = None
+        line_style = {"fill": "none", "line": "#111111", "line_weight_pt": 1.0, "end_arrow": "none"}
+        for start, end in zip(closed_points, closed_points[1:]):
+            first_shape = draw_line_segment(page, page_height, start, end, line_style)
+        return first_shape
+
+
+def node_polygon_points(node: dict[str, Any]) -> list[tuple[float, float]]:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    raw_points = node.get("points")
+    if not isinstance(raw_points, list) or not raw_points:
+        raise ValueError(f"polygon node `{node.get('id', '<unknown>')}` requires `points`.")
+
+    points: list[tuple[float, float]] = []
+    for point in raw_points:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValueError(f"polygon node `{node.get('id', '<unknown>')}` has invalid point `{point}`.")
+        px = x + relative_or_absolute(point[0], width)
+        py = y + relative_or_absolute(point[1], height)
+        points.append((px, py))
+    return points
+
+
+def draw_polygon_node(page: Any, page_height: float, node: dict[str, Any]) -> Any:
+    return draw_polygon_from_points(page, page_height, node_polygon_points(node))
+
+
+def draw_trapezoid_node(page: Any, page_height: float, node: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    orientation = str(node.get("orientation", "right")).lower()
+    taper = max(0.0, min(0.49, float(node.get("taper_ratio", node.get("taper", 0.22)))))
+    pointed = bool(node.get("pointed", False))
+
+    if orientation == "right":
+        points = [(x, y), (x + width, y + height / 2), (x, y + height)] if pointed else [
+            (x, y),
+            (x + width, y + height * taper),
+            (x + width, y + height * (1 - taper)),
+            (x, y + height),
+        ]
+    elif orientation == "left":
+        points = [(x + width, y), (x, y + height / 2), (x + width, y + height)] if pointed else [
+            (x + width, y),
+            (x, y + height * taper),
+            (x, y + height * (1 - taper)),
+            (x + width, y + height),
+        ]
+    elif orientation == "down":
+        points = [(x, y), (x + width, y), (x + width / 2, y + height)] if pointed else [
+            (x, y),
+            (x + width, y),
+            (x + width * (1 - taper), y + height),
+            (x + width * taper, y + height),
+        ]
+    elif orientation == "up":
+        points = [(x, y + height), (x + width, y + height), (x + width / 2, y)] if pointed else [
+            (x + width * taper, y),
+            (x + width * (1 - taper), y),
+            (x + width, y + height),
+            (x, y + height),
+        ]
+    else:
+        raise ValueError(f"Unsupported trapezoid orientation: {orientation}")
+    return draw_polygon_from_points(page, page_height, points)
+
+
+def darker_fill(color: str, amount: float = 0.18) -> str:
+    try:
+        return blend_hex_colors(color, "#000000", max(0.0, min(1.0, amount)))
+    except Exception:
+        return color
+
+
+def lighter_fill(color: str, amount: float = 0.16) -> str:
+    try:
+        return blend_hex_colors(color, "#FFFFFF", max(0.0, min(1.0, amount)))
+    except Exception:
+        return color
+
+
+def draw_cuboid_node(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    depth_x = float(node.get("depth_x_in", style.get("depth_x_in", 0.18)))
+    depth_y = float(node.get("depth_y_in", style.get("depth_y_in", -0.16)))
+    fill = str(node.get("fill", style.get("fill", "#FFFFFF")))
+    line = str(node.get("line", style.get("line", "#111111")))
+    line_weight = float(node.get("line_weight_pt", style.get("line_weight_pt", 1.0)))
+    side_fill = str(node.get("side_fill", style.get("side_fill", darker_fill(fill, 0.18))))
+    top_fill = str(node.get("top_fill", style.get("top_fill", lighter_fill(fill, 0.14))))
+
+    top = draw_polygon_from_points(
+        page,
+        page_height,
+        [(x, y), (x + depth_x, y + depth_y), (x + width + depth_x, y + depth_y), (x + width, y)],
+    )
+    apply_style(top, {"fill": top_fill, "line": line, "line_weight_pt": line_weight})
+
+    side = draw_polygon_from_points(
+        page,
+        page_height,
+        [
+            (x + width, y),
+            (x + width + depth_x, y + depth_y),
+            (x + width + depth_x, y + height + depth_y),
+            (x + width, y + height),
+        ],
+    )
+    apply_style(side, {"fill": side_fill, "line": line, "line_weight_pt": line_weight})
+
+    front = draw_rectangle(page, page_height, node)
+    return front
+
+
+def draw_modality_spine(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    spine = draw_rectangle(page, page_height, node)
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    ports = node.get("ports", [])
+    port_style = merge_style(
+        {
+            "fill": style.get("port_fill", "#CFE8BE"),
+            "line": style.get("port_line", style.get("line", "#111111")),
+            "line_weight_pt": style.get("port_line_weight_pt", 0.8),
+            "font_family": style.get("font_family", "Times New Roman"),
+            "font_size_pt": style.get("port_font_size_pt", 10),
+            "text_color": style.get("text_color", "#111111"),
+        },
+        node.get("port_style") if isinstance(node.get("port_style"), dict) else None,
+    )
+
+    if isinstance(ports, list):
+        for port in ports:
+            if not isinstance(port, dict):
+                continue
+            pos = float(port.get("position", 0.5))
+            py = y + (height * pos if 0 <= pos <= 1 else pos)
+            pw = float(port.get("w", port.get("width", width * 1.35)))
+            ph = float(port.get("h", port.get("height", min(height * 0.08, 0.34))))
+            side = str(port.get("side", "center")).lower()
+            if side == "left":
+                px = x - pw * 0.72
+            elif side == "right":
+                px = x + width - pw * 0.28
+            else:
+                px = x + width / 2 - pw / 2
+            port_node = {"x": px, "y": py - ph / 2, "w": pw, "h": ph}
+            port_shape = draw_rectangle(page, page_height, port_node)
+            apply_style(port_shape, merge_style(port_style, port.get("style") if isinstance(port.get("style"), dict) else None), port.get("text", ""))
+            if port.get("text"):
+                try_set_text(port_shape, str(port["text"]))
+    return spine
 
 
 def draw_oval(page: Any, page_height: float, node: dict[str, Any]) -> Any:
@@ -420,8 +748,398 @@ def draw_text_box(
 ) -> Any:
     shape = draw_rectangle(page, page_height, {"x": x, "y": y, "w": width, "h": height})
     try_set_text(shape, text)
-    apply_style(shape, merge_style(style, {"fill": "none", "line": "none"}))
+    apply_style(shape, merge_style(style, {"fill": "none", "line": "none"}), text)
     return shape
+
+
+def draw_math_vector(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    entries = node.get("entries", node.get("rows"))
+    if entries is None:
+        text = str(node.get("text", "")).strip()
+        entries = [line.strip() for line in text.splitlines() if line.strip()]
+    if not isinstance(entries, list) or not entries:
+        entries = [""]
+    entries = [str(entry) for entry in entries]
+
+    prefix = str(node.get("prefix", "")).strip()
+    prefix_width = float(node.get("prefix_w", style.get("prefix_w_in", 0.36 if prefix else 0.0)))
+    gap = float(node.get("gap_in", style.get("gap_in", 0.04)))
+    bracket_width = float(node.get("bracket_w", style.get("bracket_w_in", 0.08)))
+    tick = float(node.get("bracket_tick_in", style.get("bracket_tick_in", 0.06)))
+    tick_len = min(bracket_width, tick)
+    bracket_style = merge_style(
+        style,
+        {
+            "fill": "none",
+            "line": node.get("bracket_line", style.get("bracket_line", style.get("line", "#111111"))),
+            "line_weight_pt": node.get("bracket_line_weight_pt", style.get("bracket_line_weight_pt", 0.8)),
+            "end_arrow": "none",
+        },
+    )
+    text_style = merge_style(style, {"fill": "none", "line": "none"})
+    shape = None
+
+    if prefix:
+        shape = draw_text_box(
+            page,
+            page_height,
+            x,
+            y,
+            prefix_width,
+            height,
+            prefix,
+            merge_style(text_style, {"text_align": 2, "vertical_align": 1}),
+        )
+
+    left_x = x + prefix_width + (gap if prefix else 0.0)
+    right_x = x + width
+    content_x = left_x + bracket_width
+    content_w = max(0.05, right_x - left_x - 2 * bracket_width)
+    row_h = height / max(1, len(entries))
+
+    draw_left = bool(node.get("left_bracket", True))
+    draw_right = bool(node.get("right_bracket", True))
+    if draw_left:
+        shape = draw_line_segment(page, page_height, (left_x + tick_len, y), (left_x, y), bracket_style)
+        shape = draw_line_segment(page, page_height, (left_x, y), (left_x, y + height), bracket_style)
+        shape = draw_line_segment(page, page_height, (left_x, y + height), (left_x + tick_len, y + height), bracket_style)
+    if draw_right:
+        rx = right_x - bracket_width
+        shape = draw_line_segment(page, page_height, (right_x - tick_len, y), (right_x, y), bracket_style)
+        shape = draw_line_segment(page, page_height, (right_x, y), (right_x, y + height), bracket_style)
+        shape = draw_line_segment(page, page_height, (right_x, y + height), (right_x - tick_len, y + height), bracket_style)
+
+    for index, entry in enumerate(entries):
+        shape = draw_text_box(
+            page,
+            page_height,
+            content_x,
+            y + index * row_h,
+            content_w,
+            row_h,
+            entry,
+            merge_style(
+                text_style,
+                {
+                    "font_size_pt": node.get("entry_font_size_pt", style.get("entry_font_size_pt", style.get("font_size_pt", 10))),
+                    "text_align": 1,
+                    "vertical_align": 1,
+                },
+            ),
+        )
+
+    return shape or draw_text_box(page, page_height, x, y, width, height, "", text_style)
+
+
+def draw_math_text(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    base_font = float(node.get("font_size_pt", style.get("font_size_pt", 12)) or 12)
+    subscript_scale = float(node.get("subscript_scale", style.get("subscript_scale", 0.72)) or 0.72)
+    subscript_font = max(1.0, base_font * subscript_scale)
+    subscript_offset = float(node.get("subscript_offset_in", style.get("subscript_offset_in", base_font / 72.0 * 0.22)))
+    line_gap = float(node.get("line_gap_in", style.get("line_gap_in", base_font / 72.0 * 0.28)))
+    segment_gap = float(node.get("segment_gap_in", style.get("segment_gap_in", 0.0)))
+    padding = float(node.get("padding_in", style.get("text_padding_in", 0.0)) or 0.0)
+    fragment_pad = float(node.get("fragment_pad_in", style.get("fragment_pad_in", 0.015)) or 0.0)
+    subscript_pad = float(node.get("subscript_pad_in", style.get("subscript_pad_in", 0.006)) or 0.0)
+    subscript_box_pad = float(node.get("subscript_box_pad_in", style.get("subscript_box_pad_in", 0.22)) or 0.0)
+
+    raw_lines = node.get("lines")
+    parsed_lines: list[list[dict[str, Any]]] = []
+    if isinstance(raw_lines, list) and raw_lines:
+        for raw_line in raw_lines:
+            if isinstance(raw_line, list):
+                parsed_lines.append([
+                    {"text": str(fragment.get("text", "")), "subscript": bool(fragment.get("subscript"))}
+                    for fragment in raw_line
+                    if isinstance(fragment, dict) and str(fragment.get("text", ""))
+                ])
+            else:
+                parsed_lines.append(parse_math_text_line(str(raw_line)))
+    else:
+        text = str(node.get("text", ""))
+        parsed_lines = [parse_math_text_line(line) for line in text.splitlines()]
+
+    parsed_lines = [line for line in parsed_lines if line]
+    if not parsed_lines:
+        return draw_text_box(page, page_height, x, y, width, height, "", merge_style(style, {"fill": "none", "line": "none"}))
+
+    line_height = base_font / 72.0 * 1.18
+    total_height = len(parsed_lines) * line_height + max(0, len(parsed_lines) - 1) * line_gap
+    vertical_align = int(style.get("vertical_align", 1))
+    if vertical_align == 0:
+        cursor_y = y + padding
+    elif vertical_align == 2:
+        cursor_y = y + max(padding, height - total_height - padding)
+    else:
+        cursor_y = y + max(padding, (height - total_height) / 2)
+
+    text_align = int(style.get("text_align", 1))
+    text_style = merge_style(style, {"fill": "none", "line": "none", "vertical_align": 1})
+    shape = None
+    for line in parsed_lines:
+        metrics: list[tuple[float, float]] = []
+        for index, fragment in enumerate(line):
+            is_subscript = bool(fragment.get("subscript"))
+            text = str(fragment["text"])
+            font_size = subscript_font if is_subscript else base_font
+            raw_width = approximate_text_width(text, font_size)
+            next_is_subscript = index + 1 < len(line) and bool(line[index + 1].get("subscript"))
+            if is_subscript:
+                box_width = raw_width + subscript_box_pad
+                advance_width = raw_width + subscript_pad
+            elif next_is_subscript and len(text.strip()) == 1:
+                box_width = raw_width + fragment_pad
+                advance_width = raw_width + min(fragment_pad, 0.004)
+            else:
+                box_width = raw_width + fragment_pad
+                advance_width = box_width
+            metrics.append((max(0.02, box_width), max(0.02, advance_width)))
+        line_width = sum(advance for _, advance in metrics) + max(0, len(metrics) - 1) * segment_gap
+        if text_align == 0:
+            cursor_x = x + padding
+        elif text_align == 2:
+            cursor_x = x + max(padding, width - line_width - padding)
+        else:
+            cursor_x = x + max(padding, (width - line_width) / 2)
+
+        for fragment, (fragment_box_width, fragment_advance_width) in zip(line, metrics):
+            is_subscript = bool(fragment.get("subscript"))
+            fragment_font = subscript_font if is_subscript else base_font
+            fragment_y = cursor_y + (subscript_offset if is_subscript else 0.0)
+            shape = draw_text_box(
+                page,
+                page_height,
+                cursor_x,
+                fragment_y,
+                fragment_box_width,
+                line_height,
+                str(fragment["text"]),
+                merge_style(
+                    text_style,
+                    {
+                        "font_size_pt": fragment_font,
+                        "text_align": 0,
+                        "vertical_align": 1,
+                        "text_margin_in": 0.0,
+                    },
+                ),
+            )
+            cursor_x += fragment_advance_width + segment_gap
+        cursor_y += line_height + line_gap
+
+    return shape
+
+
+def default_tfr_cells(rows: int, cols: int) -> list[list[Any]]:
+    palette = ["#B9D4F1", "#F39FC6", "#F6CBD7", "#B9D4F1", "#F6CBD7"]
+    cells: list[list[Any]] = []
+    for row in range(rows):
+        for col in range(cols):
+            color = palette[(row * 2 + col) % len(palette)]
+            if row == rows // 2 and col == cols // 2:
+                color = "#8EB8E6"
+            cells.append([row, col, color])
+    return cells
+
+
+def draw_tfr_panel(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    panel_style = merge_style(style, {"text_align": 1, "vertical_align": 1})
+    base = draw_rectangle(page, page_height, node)
+    apply_style(base, panel_style)
+
+    title = str(node.get("title", node.get("text", "TFR"))).strip()
+    subtitle = str(node.get("subtitle", "")).strip()
+    input_label = str(node.get("input_label", "Input")).strip()
+    title_h = float(node.get("title_h_in", max(0.22, height * 0.23)))
+    subtitle_h = float(node.get("subtitle_h_in", max(0.14, height * 0.10))) if subtitle else 0.0
+    top_pad = float(node.get("top_pad_in", height * 0.07))
+    input_h = float(node.get("input_h_in", max(0.20, height * 0.14)))
+    input_gap = float(node.get("input_gap_in", max(0.08, height * 0.045)))
+
+    if title:
+        draw_text_box(
+            page,
+            page_height,
+            x + width * 0.08,
+            y + top_pad,
+            width * 0.84,
+            title_h,
+            title,
+            merge_style(panel_style, {"fill": "none", "line": "none", "font_size_pt": style.get("title_font_size_pt", 18)}),
+        )
+    if subtitle:
+        draw_text_box(
+            page,
+            page_height,
+            x + width * 0.06,
+            y + top_pad + title_h * 0.78,
+            width * 0.88,
+            subtitle_h,
+            subtitle,
+            merge_style(panel_style, {"fill": "none", "line": "none", "font_size_pt": style.get("subtitle_font_size_pt", 12)}),
+        )
+
+    rows = int(node.get("rows", 4))
+    cols = int(node.get("cols", 5))
+    grid_w = float(node.get("grid_w", node.get("grid_w_in", min(width * 0.58, height * 0.44 * cols / max(1, rows)))))
+    grid_h = float(node.get("grid_h", node.get("grid_h_in", grid_w * rows / max(1, cols))))
+    max_grid_h = max(0.1, height - top_pad - title_h - subtitle_h - input_h - input_gap - height * 0.08)
+    if grid_h > max_grid_h:
+        grid_h = max_grid_h
+        grid_w = grid_h * cols / max(1, rows)
+    grid_x = float(node.get("grid_x", x + (width - grid_w) / 2))
+    grid_y_default = y + top_pad + title_h + subtitle_h + float(node.get("grid_top_gap_in", height * 0.02))
+    grid_y = float(node.get("grid_y", grid_y_default))
+    input_y = float(node.get("input_y", grid_y + grid_h + input_gap))
+    if input_y + input_h > y + height - height * 0.04:
+        input_y = y + height - height * 0.04 - input_h
+
+    grid_node = {
+        "x": grid_x,
+        "y": grid_y,
+        "w": grid_w,
+        "h": grid_h,
+        "rows": rows,
+        "cols": cols,
+        "colored_cells": node.get("colored_cells", node.get("cells", default_tfr_cells(rows, cols))),
+    }
+    grid_style = merge_style(
+        {
+            "cell_fill": node.get("cell_fill", "#FFFFFF"),
+            "grid_line": style.get("grid_line", "#777777"),
+            "grid_line_weight_pt": style.get("grid_line_weight_pt", 0.75),
+            "line": style.get("grid_outline", style.get("line", "#666666")),
+            "line_weight_pt": style.get("grid_outline_weight_pt", 0.8),
+        },
+        node.get("grid_style") if isinstance(node.get("grid_style"), dict) else None,
+    )
+    shape = draw_grid_matrix(page, page_height, grid_node, grid_style)
+
+    if node.get("input_arrow"):
+        arrow_x = x + width * float(node.get("input_arrow_x", 0.5))
+        arrow_gap = float(node.get("input_arrow_gap_in", max(0.03, height * 0.02)))
+        start_y = max(grid_y + grid_h + arrow_gap, input_y - arrow_gap)
+        end_y = min(input_y - arrow_gap, grid_y + grid_h + arrow_gap)
+        if start_y - end_y > 0.04:
+            shape = draw_line_segment(
+                page,
+                page_height,
+                (arrow_x, start_y),
+                (arrow_x, end_y),
+                merge_style(
+                    {
+                        "line": style.get("line", "#6F6F6F"),
+                        "line_weight_pt": style.get("line_weight_pt", 1.0),
+                        "end_arrow": "triangle",
+                        "arrow_size": style.get("input_arrow_size", "small"),
+                    },
+                    node.get("input_arrow_style") if isinstance(node.get("input_arrow_style"), dict) else None,
+                ),
+            )
+
+    if input_label:
+        shape = draw_text_box(
+            page,
+            page_height,
+            x + width * 0.15,
+            input_y,
+            width * 0.70,
+            input_h,
+            input_label,
+            merge_style(panel_style, {"fill": "none", "line": "none", "font_size_pt": style.get("input_font_size_pt", 16)}),
+        )
+    return shape or base
+
+
+def draw_loss_region(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
+    x = float(node["x"])
+    y = float(node["y"])
+    width = float(node["w"])
+    height = float(node["h"])
+    frame = draw_group_container(page, page_height, node, merge_style(style, {"fill": "none"}))
+    title = str(node.get("title", node.get("caption", ""))).strip()
+    formulas = node.get("formulas", node.get("lines", []))
+    if isinstance(formulas, str):
+        formulas = [line for line in formulas.splitlines() if line.strip()]
+    if not isinstance(formulas, list):
+        formulas = []
+    formulas = [normalize_loss_formula_text(str(item)) for item in formulas]
+
+    title_font = float(node.get("title_font_size_pt", style.get("title_font_size_pt", 15)))
+    title_position = str(node.get("title_position", style.get("title_position", "header_cutout"))).lower()
+    title_pad_x = float(node.get("title_pad_x_in", style.get("title_pad_x_in", 0.10)))
+    title_h = float(node.get("title_h_in", min(0.36, max(0.22, height * 0.28))))
+    title_y = y + float(node.get("title_inside_y_in", max(0.04, height * 0.05)))
+    formula_y = y + float(node.get("formula_pad_y_in", height * 0.14))
+    if title:
+        title_lines = title.splitlines()
+        title_h = max(title_h, max(1, len([line for line in title_lines if line])) * title_font / 72.0 * 1.16)
+        title_width_estimate = max(approximate_text_width(line, title_font) for line in title_lines if line)
+        title_box_w = float(
+            node.get(
+                "title_w_in",
+                max(min(width * 1.65, title_width_estimate + title_pad_x * 2), min(width * 0.92, title_width_estimate + title_pad_x)),
+            )
+        )
+        title_box_w = max(min(width * 1.75, title_box_w), min(width, title_width_estimate + title_pad_x))
+        title_x = x + (width - title_box_w) / 2
+        title_style = merge_style(
+            style,
+            {
+                "fill": node.get("title_fill", style.get("title_fill", "#FFFFFF")),
+                "line": "none",
+                "font_size_pt": title_font,
+                "text_align": 1,
+                "vertical_align": 1,
+                "text_margin_left_in": 0.02,
+                "text_margin_right_in": 0.02,
+                "text_margin_top_in": 0.0,
+                "text_margin_bottom_in": 0.0,
+            },
+        )
+        if title_position in {"inside", "top_inside", "inner"}:
+            title_y = y + float(node.get("title_inside_y_in", max(0.04, height * 0.05)))
+            formula_y = max(formula_y, title_y + title_h + float(node.get("title_formula_gap_in", max(0.03, height * 0.04))))
+        elif title_position in {"outside", "above"}:
+            title_y = y - title_h - float(node.get("title_gap_in", max(0.02, height * 0.02)))
+        else:
+            title_y = y - title_h * float(node.get("title_overlap_ratio", style.get("title_overlap_ratio", 0.45)))
+            formula_y = max(formula_y, y + title_h * float(node.get("header_formula_clearance_ratio", 0.72)))
+        draw_text_box(
+            page,
+            page_height,
+            title_x,
+            title_y,
+            title_box_w,
+            title_h,
+            title,
+            title_style,
+        )
+
+    if formulas:
+        formula_pad_x = float(node.get("formula_pad_x_in", width * 0.10))
+        formula_bottom_pad = float(node.get("formula_bottom_pad_in", height * 0.10))
+        math_node = {
+            "x": x + formula_pad_x,
+            "y": formula_y,
+            "w": width - 2 * formula_pad_x,
+            "h": max(0.08, y + height - formula_y - formula_bottom_pad),
+            "lines": [str(item) for item in formulas],
+        }
+        draw_math_text(page, page_height, math_node, merge_style(style, {"fill": "none", "line": "none", "text_align": 1, "vertical_align": 1}))
+    return frame
 
 
 def draw_boundary_port(page: Any, page_height: float, node: dict[str, Any], style: dict[str, Any]) -> Any:
@@ -480,6 +1198,11 @@ def draw_operator_node(page: Any, page_height: float, node: dict[str, Any], styl
                 "fill": "none",
                 "line": "none",
                 "font_family": node.get("symbol_font_family", style.get("symbol_font_family", "Cambria Math")),
+                "font_family_candidates": node.get(
+                    "symbol_font_family_candidates",
+                    style.get("symbol_font_family_candidates", style.get("font_family_candidates")),
+                ),
+                "font_role": node.get("symbol_font_role", style.get("symbol_font_role", "math")),
                 "font_size_pt": node.get(
                     "symbol_font_size_pt",
                     style.get("symbol_font_size_pt", max(6, min(width, height) * 72 * 0.58)),
@@ -733,8 +1456,8 @@ def draw_classifier_head(page: Any, page_height: float, node: dict[str, Any], st
         block_x = x + padding + index * (block_w + gap)
         block_node = {"x": block_x, "y": block_y, "w": block_w, "h": block_h}
         shape = draw_rectangle(page, page_height, block_node)
-        apply_style(shape, merge_style(block_style, block.get("style") if isinstance(block.get("style"), dict) else None))
         text = str(block.get("text", block.get("label", "")))
+        apply_style(shape, merge_style(block_style, block.get("style") if isinstance(block.get("style"), dict) else None), text)
         if text:
             try_set_text(shape, text)
 
@@ -822,8 +1545,8 @@ def draw_classifier_head_vertical(page: Any, page_height: float, node: dict[str,
         current_y = block_y + index * (block_h + gap)
         block_node = {"x": block_x, "y": current_y, "w": block_w, "h": block_h}
         shape = draw_rectangle(page, page_height, block_node)
-        apply_style(shape, merge_style(block_style, block.get("style") if isinstance(block.get("style"), dict) else None))
         text = str(block.get("text", block.get("label", "")))
+        apply_style(shape, merge_style(block_style, block.get("style") if isinstance(block.get("style"), dict) else None), text)
         if text:
             try_set_text(shape, text)
 
@@ -916,7 +1639,7 @@ def draw_stacked_process(page: Any, page_height: float, node: dict[str, Any], st
         layer_node["x"] = float(node["x"]) + dx * index
         layer_node["y"] = float(node["y"]) + dy * index
         shape = draw_rectangle(page, page_height, layer_node)
-        apply_style(shape, style)
+        apply_style(shape, style, node.get("text", node.get("symbol", "")))
 
     return shape
 
@@ -1311,6 +2034,22 @@ def draw_node(
             shape = draw_rectangle(page, page_height, node)
         elif render_kind == "oval":
             shape = draw_oval(page, page_height, node)
+        elif render_kind == "polygon_node":
+            shape = draw_polygon_node(page, page_height, node)
+        elif render_kind == "trapezoid_node":
+            shape = draw_trapezoid_node(page, page_height, node)
+        elif render_kind == "cuboid_node":
+            shape = draw_cuboid_node(page, page_height, node, style)
+        elif render_kind == "modality_spine":
+            shape = draw_modality_spine(page, page_height, node, style)
+        elif render_kind == "math_vector":
+            shape = draw_math_vector(page, page_height, node, style)
+        elif render_kind == "math_text":
+            shape = draw_math_text(page, page_height, node, style)
+        elif render_kind == "tfr_panel":
+            shape = draw_tfr_panel(page, page_height, node, style)
+        elif render_kind == "loss_region":
+            shape = draw_loss_region(page, page_height, node, style)
         elif render_kind == "operator_node":
             shape = draw_operator_node(page, page_height, node, style)
         elif render_kind == "diamond":
@@ -1348,11 +2087,11 @@ def draw_node(
             raise ValueError(f"Unsupported renderer: {render_kind}")
 
     text = node.get("text")
-    if text and render_kind not in {"bracket", "wave_signal", "classifier_head", "boundary_fanout", "feature_map_grid", "group_container", "audit_region", "operator_node"}:
+    if text and render_kind not in {"bracket", "wave_signal", "classifier_head", "boundary_fanout", "feature_map_grid", "group_container", "audit_region", "operator_node", "math_vector", "math_text", "tfr_panel", "loss_region"}:
         try_set_text(shape, str(text))
 
-    if render_kind not in {"bracket", "feature_map_banded", "feature_map_grid", "merge_bus", "wave_signal", "classifier_head", "boundary_fanout", "group_container", "operator_node"}:
-        apply_style(shape, style)
+    if render_kind not in {"bracket", "feature_map_banded", "feature_map_grid", "merge_bus", "wave_signal", "classifier_head", "boundary_fanout", "group_container", "operator_node", "math_vector", "math_text", "tfr_panel", "loss_region"}:
+        apply_style(shape, style, node.get("text", node.get("symbol", "")))
     if render_kind == "terminator" and "rounding_in" not in style:
         try_set_formula(shape, "Rounding", f"{min(float(node['h']) / 2, 0.25)} in")
     return shape
@@ -1427,12 +2166,18 @@ def edge_route_points(
     end = resolve_edge_endpoint(edge, "to", to_peer_point, nodes_by_id)
 
     explicit_points = edge.get("points") or []
+    start_tangent_point = edge_named_point(edge, "start_tangent_point")
+    end_tangent_point = edge_named_point(edge, "end_tangent_point")
     axis_snap = float(edge.get("axis_snap_in", style.get("axis_snap_in", 0.03)))
-    if explicit_points:
-        return snap_axis_segments(
-            [start, *[(float(x), float(y)) for x, y in explicit_points], end],
-            axis_snap,
-        )
+    if explicit_points or start_tangent_point or end_tangent_point:
+        routed: list[tuple[float, float]] = []
+        append_distinct_point(routed, start)
+        append_distinct_point(routed, start_tangent_point)
+        for x, y in explicit_points:
+            append_distinct_point(routed, (float(x), float(y)))
+        append_distinct_point(routed, end_tangent_point)
+        append_distinct_point(routed, end)
+        return snap_axis_segments(routed, axis_snap)
 
     route = edge.get("route") or style.get("route") or "auto"
     if route == "straight":
@@ -1473,14 +2218,54 @@ def draw_line_segment(
     segment_length = math.hypot(end[0] - start[0], end[1] - start[1])
     shape = page.DrawLine(start[0], to_visio_y(page_height, start[1]), end[0], to_visio_y(page_height, end[1]))
     apply_style(shape, style)
+    apply_arrow_style(shape, style, segment_length)
+    return shape
+
+
+def apply_arrow_style(shape: Any, style: dict[str, Any], path_length: float) -> None:
     if style.get("end_arrow") == "triangle":
         try_set_result(shape, "EndArrow", 13)
-        try_set_result(shape, "EndArrowSize", arrow_size_value(style.get("arrow_size", style.get("end_arrow_size")), segment_length))
+        try_set_result(shape, "EndArrowSize", arrow_size_value(style.get("arrow_size", style.get("end_arrow_size")), path_length))
     elif style.get("end_arrow") == "none":
         try_set_result(shape, "EndArrow", 0)
     if style.get("begin_arrow") == "triangle":
         try_set_result(shape, "BeginArrow", 13)
-        try_set_result(shape, "BeginArrowSize", arrow_size_value(style.get("begin_arrow_size", style.get("arrow_size")), segment_length))
+        try_set_result(shape, "BeginArrowSize", arrow_size_value(style.get("begin_arrow_size", style.get("arrow_size")), path_length))
+
+
+def draw_single_path(
+    page: Any,
+    page_height: float,
+    points: list[tuple[float, float]],
+    style: dict[str, Any],
+    curve_mode: str = "polyline",
+) -> Any:
+    if len(points) < 2:
+        raise ValueError("Path edges require at least two points.")
+
+    render_points = points
+    if curve_mode in {"smooth", "spline"}:
+        samples = int(style.get("smooth_samples", style.get("samples_per_segment", 10)) or 10)
+        render_points = catmull_rom_points(points, max(3, samples))
+
+    values: list[float] = []
+    for x, y in render_points:
+        values.extend([float(x), to_visio_y(page_height, float(y))])
+
+    tolerance = float(style.get("curve_tolerance", 0.0))
+    shape = None
+    if curve_mode == "bezier" and len(points) >= 4:
+        try:
+            shape = draw_visio_bezier(page, values, tolerance)
+        except Exception:
+            shape = None
+
+    if shape is None:
+        shape = draw_visio_polyline(page, values, tolerance)
+
+    apply_style(shape, style)
+    path_length = sum(math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(render_points, render_points[1:]))
+    apply_arrow_style(shape, style, path_length)
     return shape
 
 
@@ -1504,7 +2289,18 @@ def draw_edge(
     profile: dict[str, Any],
 ) -> tuple[Any, float, float]:
     style = edge_style(edge, component_map, profile)
+    definition = component_map["edge_types"][edge["type"]]
     points = edge_route_points(edge, style, nodes_by_id)
+    renderer = definition.get("renderer", "straight_line")
+    if renderer in {"single_path", "curved_path"}:
+        curve_mode = str(edge.get("curve_mode", edge.get("curve", style.get("curve_mode", "polyline")))).lower()
+        if renderer == "single_path" and curve_mode in {"auto", ""}:
+            curve_mode = "polyline"
+        shape = draw_single_path(page, page_height, points, style, curve_mode)
+        mid_index = len(points) // 2
+        mid_x, mid_y = points[mid_index]
+        return shape, mid_x, mid_y
+
     segments = []
     for index in range(len(points) - 1):
         segment_style = dict(style)
@@ -1536,6 +2332,7 @@ def draw_edge_label(page: Any, page_height: float, text: str, mid_x: float, mid_
                 "font_weight": "regular",
             },
         ),
+        text,
     )
     return shape
 
@@ -1552,6 +2349,94 @@ def resolve_profile(scene: dict[str, Any], profiles: dict[str, Any], requested: 
     return name, profile
 
 
+def scene_text_corpus(scene: dict[str, Any]) -> str:
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    parts = [str(metadata.get("title", "")), str(metadata.get("notes", "")), str(metadata.get("fidelity", ""))]
+    for node in scene.get("nodes", []) or []:
+        if isinstance(node, dict):
+            parts.extend(str(node.get(key, "")) for key in ("id", "type", "text", "title", "subtitle", "semantic_role"))
+    return " ".join(parts).lower()
+
+
+def should_run_rebuild_gate(scene: dict[str, Any]) -> bool:
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    fidelity = str(metadata.get("fidelity", "")).lower()
+    corpus = scene_text_corpus(scene)
+    return (
+        fidelity in {"exact", "strict", "replica", "reconstruction"}
+        or ("generator" in corpus and "discriminator" in corpus)
+        or ("gan" in corpus and "tfr" in corpus)
+    )
+
+
+def should_run_gan_tfr_autofix(scene: dict[str, Any]) -> bool:
+    corpus = scene_text_corpus(scene)
+    if ("generator" in corpus and "discriminator" in corpus) or ("gan" in corpus and "tfr" in corpus):
+        return True
+    for node in scene.get("nodes", []) or []:
+        if isinstance(node, dict) and node.get("type") in {"tfr_panel", "loss_region"}:
+            return True
+    return False
+
+
+def maybe_autofix_gan_tfr_scene(
+    scene: dict[str, Any],
+    scene_path: Path,
+    output_dir: Path,
+    basename: str | None,
+) -> tuple[dict[str, Any], Path]:
+    if not should_run_gan_tfr_autofix(scene):
+        return scene, scene_path
+
+    try:
+        from scene_autofix import apply_gan_tfr_recipes
+    except Exception as exc:
+        print(f"WARNING: GAN/TFR autofix unavailable before render: {exc}", file=sys.stderr)
+        return scene, scene_path
+
+    fixed_scene = copy.deepcopy(scene)
+    changes = apply_gan_tfr_recipes(fixed_scene)
+    if not changes:
+        return scene, scene_path
+
+    output_name = basename or scene_path.stem
+    fixed_path = output_dir / f"{output_name}.autofixed.scene.json"
+    fixed_path.write_text(json.dumps(fixed_scene, indent=2, ensure_ascii=False), encoding="utf-8")
+    print("Applied pre-render GAN/TFR autofix:")
+    for item in changes:
+        print(f"- {item}")
+    print(f"Wrote autofixed scene: {fixed_path}")
+    return fixed_scene, fixed_path
+
+
+def run_rebuild_gate(scene_path: Path) -> None:
+    scripts_dir = skill_root() / "scripts"
+    with tempfile.TemporaryDirectory(prefix="visiomaster_gate_") as temp_dir:
+        audit_path = Path(temp_dir) / "scene.audit.md"
+        commands = [
+            [sys.executable, str(scripts_dir / "scene_validate.py"), str(scene_path), "--strict"],
+            [
+                sys.executable,
+                str(scripts_dir / "scene_audit.py"),
+                str(scene_path),
+                "--output",
+                str(audit_path),
+                "--fail-on-rebuild",
+            ],
+        ]
+        for command in commands:
+            result = subprocess.run(command, text=True, capture_output=True)
+            if result.returncode:
+                if result.stdout:
+                    print(result.stdout.rstrip())
+                if result.stderr:
+                    print(result.stderr.rstrip(), file=sys.stderr)
+                raise RuntimeError(
+                    "Rebuild gate failed before Visio rendering. Run scene_autofix.py or fix [REBUILD] items before export. "
+                    "Use --skip-rebuild-gate only for debugging."
+                )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render a visiomaster scene.json into Visio.")
     parser.add_argument("scene", help="Path to scene.json")
@@ -1564,6 +2449,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--basename", help="Optional output basename")
     parser.add_argument("--style-profile", help="Override scene style profile.")
+    parser.add_argument(
+        "--skip-rebuild-gate",
+        action="store_true",
+        help="Skip validate/audit rebuild gate before rendering exact or GAN/TFR scenes. Intended for debugging only.",
+    )
+    parser.add_argument(
+        "--no-autofix",
+        action="store_true",
+        help="Disable the pre-render GAN/TFR deterministic autofix pass.",
+    )
     return parser.parse_args()
 
 
@@ -1573,7 +2468,18 @@ def main() -> int:
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    scene = normalize_scene_coordinates(load_json(scene_path))
+    raw_scene = load_json(scene_path)
+    gate_scene_path = scene_path
+    if not args.no_autofix:
+        raw_scene, gate_scene_path = maybe_autofix_gan_tfr_scene(raw_scene, scene_path, output_dir, args.basename)
+    if not args.skip_rebuild_gate and should_run_rebuild_gate(raw_scene):
+        try:
+            run_rebuild_gate(gate_scene_path)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+
+    scene = normalize_scene_coordinates(raw_scene)
     component_map = load_component_map()
     profiles = load_style_profiles()
     profile_name, profile = resolve_profile(scene, profiles, args.style_profile)

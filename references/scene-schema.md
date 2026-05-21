@@ -71,6 +71,14 @@ Recommended fields:
   "source_image": "C:/path/source.png",
   "source_aspect_ratio": 2.817,
   "style_reference": "C:/path/style.jpg",
+  "region_strategy": "region_first",
+  "font_scale": {
+    "frame_title": 15,
+    "body": 12,
+    "small_label": 9,
+    "operator": 14,
+    "formula": 11
+  },
   "notes": [
     "Main structure should stay editable.",
     "Image tiles may remain raster when they are secondary."
@@ -79,6 +87,45 @@ Recommended fields:
 ```
 
 For 1:1 replica tasks, set `fidelity` to `exact`, and provide either `source_image` or `source_aspect_ratio`. The validator compares the page aspect ratio against the source so a wide paper figure is not accidentally rebuilt on a taller canvas.
+
+For large or dense figures, set `region_strategy` to one of:
+
+- `region_first`: define every visible/invisible module as a region before detailed node authoring.
+- `tiled_subscenes`: reconstruct source crops or local module scenes first, then convert their coordinates into the full page.
+- `module_first`: build semantic modules first, then place them on the final canvas.
+
+Use `font_scale` as a human-readable contract for consistent text sizing. The renderer does not require it, but `scene_validate.py` will warn when same-type nodes drift across a wide font range.
+
+For exact replicas, add typography intent when the source uses distinctive fonts. `visiomaster` cannot guarantee that every machine has the same font, so scenes should record both the preferred source font and a role-based fallback:
+
+```json
+{
+  "style": {
+    "source_font_family": "Calibri",
+    "font_family": "Calibri",
+    "font_family_candidates": ["Calibri", "Arial", "Segoe UI"],
+    "font_role": "ui_sans"
+  }
+}
+```
+
+Supported `font_role` values are `paper_serif`, `serif`, `ui_sans`, `sans`, `math`, `mono`, `cjk_sans`, and `cjk_serif`. The renderer resolves `font_family` / `font_family_candidates` against locally installed Windows fonts. If a requested font is missing, it picks a close role fallback; if `source_font_family` is installed but the scene resolves to a different font, `scene_audit.py` reports the mismatch.
+
+## Large Figure Discipline
+
+Large source images fail differently from small diagrams. The usual problem is not a missing Visio shape; it is global reasoning drift: a few nodes shift, one local font size changes, connectors cross a region boundary, and the whole figure still looks plausible at full scale.
+
+Use this workflow when the scene has roughly 30+ visible nodes, 35+ edges, tiny paper labels, or a very wide aspect ratio:
+
+1. Create the full page in source-pixel coordinates.
+2. Add visible `group_container` and invisible `audit_region` boxes before authoring all details.
+3. Assign `container_id` on every meaningful node.
+4. Keep each region around 12-18 visible nodes when possible.
+5. Freeze shared style tokens and font roles before merging region work.
+6. Run `scripts/scene_complexity.py` before full Visio render.
+7. Run `scripts/scene_audit.py` and review every region after assembly.
+
+The complexity script reports uncovered nodes, dense regions, text-fit risks, same-type font spread, overlap risks, and validation warnings. Treat those warnings as layout defects before starting visual polish.
 
 ## `nodes`
 
@@ -106,6 +153,9 @@ Optional node fields:
     "line_weight_pt": 1.25,
     "text_color": "#111827",
     "font_family": "Times New Roman",
+    "font_family_candidates": ["Times New Roman", "Cambria", "Georgia"],
+    "font_role": "paper_serif",
+    "source_font_family": "Times New Roman",
     "font_weight": "regular",
     "font_size_pt": 16,
     "line_dash": "solid",
@@ -126,6 +176,24 @@ Optional node fields:
 Use alignment fields when reconstructing module boxes such as AM-ResNet. If a component should sit on the visual midline of its parent block, set `container_id` and `align_to_container: ["center_y"]`. If several sibling nodes should share one row, give them the same `align_group` and `align_axis`.
 
 Supported node `type` values are defined in `templates/visio_components.json`.
+
+### `page_background`
+
+Use `page_background` only as a bottom-layer export helper when Visio would otherwise crop the exported PNG to the drawn shapes. It preserves the intended canvas ratio without acting as a flowchart node.
+
+```json
+{
+  "id": "page_background",
+  "type": "page_background",
+  "x": 0,
+  "y": 0,
+  "w": 900,
+  "h": 575,
+  "z": -100
+}
+```
+
+Do not use a white `process_box` as a fake background. Background nodes are ignored by route-intersection checks; fake process boxes pollute validation and audit output.
 
 ### `stacked_process`
 
@@ -230,6 +298,187 @@ Use `feature_map_grid` for AM-ResNet features, heatmap-like feature maps, and sm
 
 `column_shades` values are normalized from `0` to `1`; the renderer blends the row color toward `shade_color` instead of laying an opaque black rectangle over the feature map. Use `column_weights` if the source has uneven column widths.
 
+### `polygon_node`
+
+Use `polygon_node` as a controlled fallback for unusual paper shapes that are not rectangles, brackets, cuboids, feature maps, or standard trapezoids.
+
+```json
+{
+  "id": "hourglass_left",
+  "type": "polygon_node",
+  "x": 1190,
+  "y": 410,
+  "w": 120,
+  "h": 240,
+  "points": [[0, 0], [1, 0.5], [0, 1]],
+  "style": {
+    "fill": "#B9CBEF",
+    "line": "#4B5563"
+  }
+}
+```
+
+Points are local to the node. Values in `[-1, 1]` are treated as normalized node-relative coordinates; larger values are treated as absolute offsets in scene units. Prefer semantic components such as `trapezoid_node` or `cuboid_node` when they match the source.
+
+### `trapezoid_node`
+
+Use `trapezoid_node` for directional paper modules such as quality heads, extractor wedges, aggregation modules, or triangular arrow-like processors.
+
+```json
+{
+  "id": "quality_head",
+  "type": "trapezoid_node",
+  "x": 980,
+  "y": 160,
+  "w": 130,
+  "h": 190,
+  "text": "Quality\nHead Qm",
+  "orientation": "right",
+  "taper_ratio": 0.22,
+  "style": {
+    "fill": "#D9D9D9",
+    "line": "#333333",
+    "font_size_pt": 12
+  }
+}
+```
+
+`orientation` accepts `left`, `right`, `up`, and `down`. Use `pointed: true` for triangular or nearly triangular blocks.
+
+### `cuboid_node`
+
+Use `cuboid_node` for 3D paper blocks where depth is part of the visual encoding, such as modality-related impact factors or tensor blocks.
+
+```json
+{
+  "id": "impact_factor",
+  "type": "cuboid_node",
+  "x": 520,
+  "y": 540,
+  "w": 250,
+  "h": 90,
+  "text": "cm",
+  "depth_x_in": 0.20,
+  "depth_y_in": -0.18,
+  "style": {
+    "fill": "#B9DDA6",
+    "side_fill": "#8FC36A",
+    "top_fill": "#D9EFCF"
+  }
+}
+```
+
+The renderer creates editable front, top, and side faces. Keep the front face as the semantic endpoint for connectors.
+
+### `modality_spine`
+
+Use `modality_spine` for a vertical shared-response or availability-mask bar with repeated modality ports, as in RGB/IR/SAR availability pipelines.
+
+```json
+{
+  "id": "availability_mask",
+  "type": "modality_spine",
+  "x": 360,
+  "y": 150,
+  "w": 34,
+  "h": 500,
+  "ports": [
+    {"position": 0.08, "text": "P_RGB", "side": "center"},
+    {"position": 0.50, "text": "P_IR", "side": "center"},
+    {"position": 0.92, "text": "P_SAR", "side": "center"}
+  ],
+  "style": {
+    "fill": "#C9C9C9",
+    "port_fill": "#CFE8BE"
+  }
+}
+```
+
+`position` values in `[0, 1]` are normalized along the spine height; larger values are treated as scene-unit offsets from the spine top. Ports are part of the node, so route connectors to explicit side endpoints or separate `junction_point` anchors when individual ports need distinct topology.
+
+### `math_vector`
+
+Use `math_vector` for compact paper formulas such as `q = [q_RGB, q_IR, q_SAR]^T`. Do not build these with a plain multi-line `text_block` containing Unicode bracket glyphs; the line spacing and bracket alignment will drift across fonts and Visio versions.
+
+```json
+{
+  "id": "q_vector",
+  "type": "math_vector",
+  "x": 1129,
+  "y": 126,
+  "w": 87,
+  "h": 93,
+  "prefix": "q =",
+  "entries": ["q_RGB", "q_IR", "q_SAR"],
+  "container_id": "panel_quality",
+  "style": {
+    "font_family": "Times New Roman",
+    "font_size_pt": 10,
+    "entry_font_size_pt": 10
+  }
+}
+```
+
+`math_vector` renders the optional prefix, bracket strokes, and entries as editable shapes/text. Tuning fields: `prefix_w`, `gap_in`, `bracket_w`, `bracket_tick_in`, `entry_font_size_pt`, `left_bracket`, and `right_bracket`.
+
+### `math_text`
+
+Use `math_text` for short inline formulas that need subscript-like notation but do not need a full vector bracket. This is the preferred component for GAN/TFR loss labels such as `L_adv` and `L_rec`.
+
+```json
+{
+  "id": "adv_loss_text",
+  "type": "math_text",
+  "x": 356,
+  "y": 222,
+  "w": 205,
+  "h": 48,
+  "text": "Adversarial Loss L_adv\nGradient Penalty GP",
+  "container_id": "adv_loss_box",
+  "style": {
+    "font_family": "Times New Roman",
+    "font_size_pt": 14
+  }
+}
+```
+
+The renderer normalizes compact loss spellings such as `Ladv`, `Lrec`, `L adv`, and `L rec` to `L_adv` / `L_rec`, then splits patterns like `L_adv` into editable fragments (`L` plus smaller lowered `adv`). Tuning fields: `subscript_scale`, `subscript_offset_in`, `line_gap_in`, `segment_gap_in`, `fragment_pad_in`, `subscript_pad_in`, `subscript_box_pad_in`, and `padding_in`. For exact paper figures, compact or raw underscore loss notation inside a normal `text_block` should be treated as a local rebuild issue.
+
+### `tfr_panel`
+
+Use `tfr_panel` for Real/Generated/Reconstructed TFR blocks in GAN-style paper diagrams. It is a composite editable node: the rounded background, title, optional subtitle, internal grid, input label, and optional internal input arrow stay under one semantic component.
+
+```json
+{
+  "id": "generated_panel",
+  "type": "tfr_panel",
+  "x": 630,
+  "y": 238,
+  "w": 168,
+  "h": 177,
+  "title": "Generated",
+  "subtitle": "Reconstructed TFR",
+  "input_label": "Input",
+  "rows": 4,
+  "cols": 5,
+  "grid_y": 306,
+  "input_y": 389,
+  "input_arrow": true,
+  "style": {
+    "fill": "#C4D8FA",
+    "title_font_size_pt": 20,
+    "subtitle_font_size_pt": 14,
+    "input_font_size_pt": 18
+  }
+}
+```
+
+Prefer `tfr_panel` over a loose group of `rounded_process` + title `text_block` + `grid_matrix` + `Input` label. The loose form is fragile: feedback arrows often cross the `Input` label, internal arrows become external topology, and paired Real/Generated grids drift apart.
+
+For pixel-coordinate exact replicas, `grid_x`, `grid_y`, `grid_w`, `grid_h`, and `input_y` are scaled with the page. This keeps the internal grid from drifting when `page.units` is `px`.
+
+Use `colored_cells` when the source cell colors are meaningful. If omitted, the renderer uses a restrained pink/blue default palette suitable for GAN/TFR examples.
+
 ### `merge_bus`
 
 Use `merge_bus` for visible bus/spine merges or fan-in/fan-out trunks. It is a visible topology component, unlike invisible `junction_point`.
@@ -264,6 +513,53 @@ Use `merge_bus` for visible bus/spine merges or fan-in/fan-out trunks. It is a v
 ```
 
 Use `shape: "capsule"` or `shape: "rounded"` when the source has paper-style rounded dashed frames. Keep plain rectangles only when the source frame is visibly square.
+
+### `dashed_region`
+
+Use `dashed_region` for visible dashed annotation frames, such as the loss/evaluation box in GAN training diagrams. It renders like a visible container but is semantically different from an ordinary `process_box`.
+
+```json
+{
+  "id": "forward_loss_region",
+  "type": "dashed_region",
+  "x": 292,
+  "y": 210,
+  "w": 297,
+  "h": 90
+}
+```
+
+Keep the title as a separate `text_block` and formulas as `math_text` nodes inside the region. Do not use an empty dashed `process_box` as a fake frame. If a dashed path leaves the region, use `dashed_feedback_path` with explicit points, and set `allow_cross_container: true` only when the visible source path deliberately crosses that logical boundary.
+
+Do not route `dashed_feedback_path` segments through the interior of the dashed frame unless the source visibly shows an internal dashed path. For GAN evaluation boxes, the usual pattern is: clean `dashed_region` frame, internal `math_text`, then a boundary point/`boundary_port` where feedback exits.
+
+### `loss_region`
+
+Use `loss_region` when a dashed GAN/TFR evaluation frame, its title, and its formulas form one local subsystem. It renders the dashed frame, title, and formula lines as editable Visio shapes while keeping the node as one semantic region for validation and audit.
+
+```json
+{
+  "id": "adv_loss_region",
+  "type": "loss_region",
+  "x": 305,
+  "y": 211,
+  "w": 286,
+  "h": 72,
+  "title": "Forward Reconstruction -> Discriminator Evaluation",
+  "formulas": [
+    "Adversarial Loss L_adv",
+    "Gradient Penalty GP"
+  ],
+  "style": {
+    "line": "#6F6F6F",
+    "line_dash": "dash",
+    "font_size_pt": 14,
+    "title_font_size_pt": 16
+  }
+}
+```
+
+Use `loss_region` as the first-pass component for compact adversarial/evaluation boxes. The default title layout is inside the frame so the dashed border cannot cut through long captions. Use a header cutout only when the source visibly places the title on the frame line and leave enough white fill behind the title. Use `dashed_region` plus separate child nodes only when the source has unusual title placement or multiple independent internal items that must be routed separately.
 
 ### `audit_region`
 
@@ -601,6 +897,103 @@ Use `boundary_arrow` when the source arrow starts from a group/frame boundary ra
 
 Do not add an internal line from `vector:right` to `module_out:center` unless that internal line is visible in the source. The boundary arrow should usually be the only visible external output.
 
+Use `lane_arrow` for short paper-flow lanes that should be perfectly horizontal or vertical, such as small cuboid blocks feeding an extractor, `GAP -> GMP`, or feature-map patches feeding aggregation:
+
+```json
+{
+  "id": "grad_to_extractor",
+  "type": "lane_arrow",
+  "from_point": [882, 521],
+  "to_point": [912, 521],
+  "route": "horizontal",
+  "lane_axis": "horizontal"
+}
+```
+
+`lane_arrow` is intentionally stricter than `arrow_connector`. It is the preferred fix when a source lane should be axis-aligned but tiny endpoint differences would make `route: "straight"` render as a visibly tilted arrow. Do not silence these with `allow_diagonal: true`.
+
+Use `loop_arrow` or `curved_arrow` for smooth outer loops and circular training cycles. These render as one continuous Visio path, so the curve does not break into separate segments and the arrowhead follows the path tangent:
+
+```json
+{
+  "id": "outer_loop_to_latent",
+  "type": "loop_arrow",
+  "semantic_role": "outer_update_loop",
+  "label_id": "alternating_updates",
+  "from_point": [147, 481],
+  "points": [[60, 410], [42, 215], [135, 80], [290, 28]],
+  "end_tangent_point": [326, 24],
+  "to_point": [348, 22],
+  "curve_mode": "smooth",
+  "style": {
+    "line": "#6F6F6F",
+    "line_weight_pt": 1.4
+  }
+}
+```
+
+Do not draw a curved loop as several `line_segment` edges plus detached short `arrow_connector` heads. That is the common cause of broken outer arrows and wrong arrow directions. Bind large outer loops to a semantic label (`label_id`/`loop_label_id`) so the path reads as "Alternating Updates" or similar process flow instead of page decoration.
+
+Use `end_tangent_point` when the final arrowhead must enter a target smoothly. It is inserted between the final sampled loop point and the endpoint before smoothing/export. Use `start_tangent_point` for the same control at the beginning of a curved path. For outer update loops, `scene_audit.py --fail-on-rebuild` treats a missing `end_tangent_point` as a rebuild issue because the last arrowhead often looks kinked even when the rest of the ellipse is smooth.
+
+Use `dashed_feedback_path` for training/loss/backpropagation paths. It renders the route as one dashed path with the arrowhead on the final segment:
+
+```json
+{
+  "id": "left_backprop_to_disc",
+  "type": "dashed_feedback_path",
+  "from_point": [194, 415],
+  "points": [[194, 492], [426, 492]],
+  "to_point": [426, 368]
+}
+```
+
+Keep feedback paths orthogonal unless the source visibly uses a diagonal dashed callout. Do not use `allow_diagonal: true` to silence loss/backprop arrows that should be horizontal/vertical.
+
+Do not use short dashed `line_segment` arrows as feedback fragments. In GAN/TFR figures, dashed arrows should be semantic `dashed_feedback_path` routes or arrowless bus segments. An arrowhead on a tiny dashed line is usually the artifact that makes the discriminator look surrounded by an extra dashed box.
+
+When a `loss_region` sits above a target such as `Discriminator` and the two boxes overlap horizontally, use short vertical stubs from the loss frame boundary to `target:top@ratio`:
+
+```json
+{
+  "id": "adv_loss_to_disc_left",
+  "type": "dashed_feedback_path",
+  "from_point": [420, 266],
+  "to": "discriminator:top@0.36",
+  "route": "vertical"
+}
+```
+
+Do not route this case from the loss frame corner to `target:left/right`; mirrored L-shaped paths read as an extra dashed box around the target.
+
+For bottom loss/backprop systems with three or more parallel vertical arrows into the same discriminator/module, add a shared `merge_bus` or `junction_point` and give related paths a `bundle_id`. This keeps the feedback system visually grouped and prevents several independent dashed arrows from crowding the loss label.
+
+GAN/TFR direction rule: generated/reconstructed TFR normally flows into the Discriminator for evaluation. If a main horizontal arrow runs from `Discriminator` to `Generated`, treat it as reversed unless the source explicitly labels it as discriminator output.
+
+For exact GAN/training-loop replicas, run:
+
+```powershell
+python ${SKILL_DIR}\scripts\scene_audit.py <scene.json> --fail-on-rebuild
+```
+
+Any `[REBUILD]` item means the local grammar is wrong. Stop nudging coordinates and rebuild that subsystem before continuing.
+
+For GAN/TFR figures, seed the scene from the first-pass template when possible:
+
+```powershell
+python ${SKILL_DIR}\scripts\image_to_scene.py --image <source.png> --template gan-tfr --output <scene.json>
+```
+
+For legacy or hand-authored GAN/TFR scenes, apply the deterministic grammar upgrade before rendering:
+
+```powershell
+python ${SKILL_DIR}\scripts\scene_autofix.py <scene.json> --recipe gan-tfr --output <fixed.scene.json>
+```
+
+The `gan-tfr` recipe compacts split TFR panels into `tfr_panel`, compacts dashed loss boxes into `loss_region`, converts raw loss formulas to `math_text`, smooths outer loops, fixes the common Generated/Discriminator direction error, and bundles crowded bottom backprop arrows.
+
+`scene_to_visio.py` applies the same GAN/TFR recipe automatically before its rebuild gate unless `--no-autofix` is passed. If the renderer writes `<basename>.autofixed.scene.json`, validate and audit that file when debugging. This prevents a scene from bypassing semantic components with ordinary dashed connectors or compact loss text on the first export attempt.
+
 Use `points` for exact paper-style residual paths, skip connections, and hand-tuned replicas.
 
 Arrow sizing:
@@ -617,6 +1010,7 @@ Arrow sizing:
 
 Routing quality rules:
 - Do not use diagonal `straight` lines for flow connectors unless the source is a real callout; set `allow_diagonal: true` only for intentional callouts.
+- For short horizontal/vertical paper lanes, use `lane_arrow` or forced `horizontal`/`vertical` routes. A `straight` edge with slightly mismatched endpoint y/x values will look visibly tilted.
 - Do not force every line to terminate on a shape. If the source has a standalone horizontal or vertical stub, use `line_segment` with `from_point` and `to_point`.
 - If an `orthogonal` edge has `points`, each adjacent point pair must share either `x` or `y`; otherwise the renderer will still draw a diagonal segment.
 - Keep intra-module connectors inside their `group_container`.
