@@ -10,6 +10,7 @@ from typing import Any
 from scene_to_visio import load_component_map, load_style_profiles, normalize_scene_coordinates, resolve_profile
 from scene_validate import (
     CONTAINER_TYPES,
+    exact_mode_from_metadata,
     estimate_text_box,
     has_valid_box,
     infer_containers,
@@ -43,6 +44,9 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
         for node in nodes
         if node.get("type") in CONTAINER_TYPES and has_valid_box(node)
     ]
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    region_plan = metadata.get("region_plan", metadata.get("source_region_plan", metadata.get("source_regions")))
+    exact_mode = exact_mode_from_metadata(metadata)
 
     page = scene.get("page", {}) if isinstance(scene.get("page"), dict) else {}
     page_width = float(page.get("width", 0) or 0)
@@ -105,8 +109,26 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
     lines.append(f"- Regions: {len(containers)}")
     lines.append(f"- Region-covered visible nodes: {len(visible_ids) - len(uncovered)}/{len(visible_ids)}")
     lines.append(f"- Cross-region edges: {cross_region_edges}")
+    lines.append(f"- Region plan entries: {len(region_plan) if isinstance(region_plan, list) else 0}")
     lines.append(f"- Validation warnings: {len(warnings)}")
     lines.append(f"- Validation errors: {len(errors)}")
+    lines.append("")
+
+    lines.append("## Source Region Plan")
+    if not exact_mode:
+        lines.append("- Not in exact reconstruction mode.")
+    elif not isinstance(region_plan, list) or not region_plan:
+        lines.append("- MISSING: add `metadata.region_plan` with source and target bboxes before full-page tuning.")
+    else:
+        for index, region in enumerate(region_plan):
+            if not isinstance(region, dict):
+                lines.append(f"- region[{index}]: invalid entry")
+                continue
+            region_id = str(region.get("id", region.get("name", f"region_{index}")))
+            source = region.get("source_bbox_px", region.get("source_bbox", region.get("bbox_px")))
+            target = region.get("target_bbox", region.get("target_bbox_in", region.get("scene_bbox", region.get("container_id", region.get("node_id")))))
+            status = "ok" if source and target else "incomplete"
+            lines.append(f"- `{region_id}`: {status}, source={source}, target={target}")
     lines.append("")
 
     lines.append("## Recommended Build Mode")
@@ -124,8 +146,21 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
             container_id = str(container.get("id"))
             child_ids = children_by_container.get(container_id, [])
             cx, cy = node_center(container)
+            area = max(0.001, float(container.get("w", 0.0)) * float(container.get("h", 0.0)))
+            density = len(child_ids) / area
+            source_ratio = container.get("source_aspect_ratio")
+            source_bbox = container.get("source_bbox_px", container.get("source_bbox"))
+            if source_ratio is None and isinstance(source_bbox, list) and len(source_bbox) == 4:
+                try:
+                    source_w = abs(float(source_bbox[2]) - float(source_bbox[0]))
+                    source_h = abs(float(source_bbox[3]) - float(source_bbox[1]))
+                    if source_h > 0:
+                        source_ratio = source_w / source_h
+                except (TypeError, ValueError):
+                    source_ratio = None
             label = "dense" if len(child_ids) > 18 else "ok"
-            lines.append(f"- `{container_id}`: {len(child_ids)} visible nodes, center=({cx:.2f}, {cy:.2f}) `{label}`")
+            ratio_text = f", source_ar={float(source_ratio):.2f}" if isinstance(source_ratio, (int, float)) else ""
+            lines.append(f"- `{container_id}`: {len(child_ids)} visible nodes, density={density:.2f}/sqin, center=({cx:.2f}, {cy:.2f}) `{label}`{ratio_text}")
     else:
         lines.append("- No regions found.")
     if uncovered:
@@ -154,6 +189,40 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
             lines.append(f"- `{container_id}` has {len(child_ids)} visible nodes; split this region or create a local subscene.")
     else:
         lines.append("- No region exceeds the default density threshold.")
+    lines.append("")
+
+    lines.append("## Paper Detail Grammar Risks")
+    compact_types = {"grid_matrix", "token_grid", "feature_vector_stack", "math_vector", "math_text", "operator_node", "concat_operator", "brace_merge", "multi_port_junction"}
+    compact_counts: dict[str, int] = defaultdict(int)
+    for node_id in visible_ids:
+        node_type = str(node_types_by_id.get(node_id))
+        if node_type in compact_types:
+            compact_counts[node_type] += 1
+    if compact_counts:
+        for node_type, count in sorted(compact_counts.items()):
+            lines.append(f"- `{node_type}`: {count}")
+    else:
+        lines.append("- No compact paper-detail primitives found; if the source has matrices, small operators, ports, or formulas, scene grammar is likely too coarse.")
+    long_edges = []
+    for edge in edges:
+        points = []
+        for key in ("from_point", "to_point"):
+            value = edge.get(key)
+            if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value):
+                points.append((float(value[0]), float(value[1])))
+        if edge.get("points") and isinstance(edge["points"], list):
+            points = [
+                (float(point[0]), float(point[1]))
+                for point in edge["points"]
+                if isinstance(point, list) and len(point) == 2 and all(isinstance(item, (int, float)) for item in point)
+            ]
+        if len(points) >= 2:
+            length = sum(((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5 for a, b in zip(points, points[1:]))
+            if length > 2.6:
+                long_edges.append((str(edge.get("id", "<missing-id>")), length))
+    if long_edges:
+        for edge_id, length in sorted(long_edges, key=lambda item: -item[1])[:8]:
+            lines.append(f"- Long explicit path `{edge_id}` length={length:.2f} in; check for missing bus/junction/boundary port.")
     lines.append("")
 
     if errors or warnings or container_warnings:

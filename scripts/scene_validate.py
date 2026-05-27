@@ -10,9 +10,12 @@ from typing import Any
 
 from font_utils import CJK_FONT_NAMES, font_resolution_for_style, has_cjk_text, installed_font_match, normalize_font_key
 from scene_to_visio import (
+    approximate_text_height,
+    approximate_text_width,
     edge_route_points,
     edge_style,
     load_style_profiles,
+    merge_style,
     node_style,
     normalize_scene_coordinates,
     resolve_profile,
@@ -25,9 +28,102 @@ ASPECT_RATIO_TOLERANCE = 0.08
 CONTAINER_TYPES = {"group_container", "dashed_region", "loss_region", "audit_region"}
 CURVED_EDGE_TYPES = {"curved_arrow", "loop_arrow"}
 CONTINUOUS_PATH_EDGE_TYPES = {"curved_arrow", "loop_arrow", "dashed_feedback_path"}
+LAYER_SEQUENCE_HORIZONTAL_ORIENTATIONS = {"horizontal", "h", "horizontal_bars", "bars", "side_by_side"}
+LAYER_SEQUENCE_VERTICAL_ORIENTATIONS = {"vertical", "v", "vertical_stack", "stack", "rows", "row_stack"}
+LAYER_SEQUENCE_ORIENTATIONS = LAYER_SEQUENCE_HORIZONTAL_ORIENTATIONS | LAYER_SEQUENCE_VERTICAL_ORIENTATIONS
+ATTENTION_SCORE_MOTIF_ENDPOINT_SIDES = {
+    "operator_left",
+    "operator_right",
+    "operator_top",
+    "operator_bottom",
+    "operator_center",
+    "op_left",
+    "op_right",
+    "op_top",
+    "op_bottom",
+    "op_center",
+    "mul_left",
+    "mul_right",
+    "mul_top",
+    "mul_bottom",
+    "mul_center",
+    "grid_left",
+    "grid_right",
+    "grid_top",
+    "grid_bottom",
+    "grid_center",
+}
 GAN_TEXT_TOKENS = {"gan", "generator", "discriminator", "generated", "reconstructed tfr"}
 LOSS_FORMULA_PATTERN = re.compile(r"\bL_([A-Za-z][A-Za-z0-9]*)\b")
 COMPACT_LOSS_FORMULA_PATTERN = re.compile(r"\bL\s*_?\s*(adv|rec)\b", re.IGNORECASE)
+GENERIC_SUBSCRIPT_LABEL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9][A-Za-z0-9_]*\b")
+COMBINING_CIRCUMFLEX = "\u0302"
+MATHISH_UNICODE_PATTERN = re.compile(r"[α-ωΑ-ΩϑϕφΦλμσΣΔΩπΠψΨτβγ]")
+MATHISH_PRIME_PATTERN = re.compile(r"[A-Za-z0-9][′']")
+MATHISH_HAT_PATTERN = re.compile(r"[A-Za-z0-9](?:\u0302|ˆ|\^)")
+FORMULA_LIKE_PATTERN = re.compile(r"[=\[\]{}]")
+OPERATOR_SIZE_TIERS = {"tiny", "small", "medium", "large", "source_small", "source_medium"}
+CONCAT_SIZE_TIERS = {"tiny", "small", "medium", "large", "source_small", "source_medium"}
+EXACT_FIDELITY_MODES = {"exact", "strict", "replica", "reconstruction", "1:1"}
+STRICT_REPLICA_REVIEW_MODES = {"strict_replica", "strict", "exact_replica", "strict_exact"}
+STRICT_REGION_CATEGORY_TOKENS = {
+    "global": {"global", "whole", "layout"},
+    "input": {"input", "left"},
+    "core": {"core", "center", "central"},
+    "output": {"output", "right"},
+    "arrow_dense": {"arrow", "dense", "topology", "junction"},
+    "small_text": {"small", "text", "formula", "matrix", "port", "boundary"},
+    "caption": {"caption", "fig", "legend"},
+}
+STRICT_REQUIRED_REGION_CATEGORIES = ("global", "input", "core", "output", "arrow_dense", "small_text")
+
+
+def exact_mode_from_metadata(metadata: Any) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    fidelity = str(metadata.get("fidelity", metadata.get("reconstruction_mode", ""))).lower()
+    review_mode = str(metadata.get("replica_review_mode", metadata.get("review_mode", ""))).lower()
+    return fidelity in EXACT_FIDELITY_MODES or review_mode in STRICT_REPLICA_REVIEW_MODES
+
+
+def region_label_text(region: dict[str, Any], *, include_required_crop_types: bool = False) -> str:
+    values = [
+        region.get("id", ""),
+        region.get("name", ""),
+        region.get("crop_type", ""),
+        region.get("review_crop_type", ""),
+        region.get("review_focus", ""),
+    ]
+    if include_required_crop_types and isinstance(region.get("required_crop_types"), list):
+        values.extend(str(item) for item in region.get("required_crop_types", []) if isinstance(item, str))
+    return " ".join(str(value) for value in values).lower()
+
+
+def region_categories(region: dict[str, Any], *, include_required_crop_types: bool = False) -> set[str]:
+    text = region_label_text(region, include_required_crop_types=include_required_crop_types)
+    categories: set[str] = set()
+    for category, tokens in STRICT_REGION_CATEGORY_TOKENS.items():
+        if any(token in text for token in tokens):
+            categories.add(category)
+    return categories
+
+
+def bbox_signature(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    try:
+        left, top, right, bottom = [round(float(item), 3) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def line_length(points: list[tuple[float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    return sum(segment_length(start, end) for start, end in zip(points, points[1:]))
 
 
 def load_component_map() -> dict:
@@ -64,6 +160,20 @@ def endpoint_position(endpoint: str) -> float | None:
         return float(raw_value)
     except ValueError:
         return None
+
+
+def endpoint_has_explicit_side_anchor(endpoint: str | None) -> bool:
+    if not isinstance(endpoint, str):
+        return False
+    side = endpoint_side(endpoint)
+    return side is not None and side != "center"
+
+
+def allowed_endpoint_sides_for_node(node_type: str | None) -> set[str]:
+    sides = {"left", "right", "top", "bottom", "center"}
+    if node_type == "attention_score_motif":
+        return sides | ATTENTION_SCORE_MOTIF_ENDPOINT_SIDES
+    return sides
 
 
 def node_box(node: dict) -> tuple[float, float, float, float]:
@@ -122,6 +232,15 @@ def node_text_for_font(node: dict) -> str:
         value = node.get(key)
         if value:
             parts.append(str(value))
+    runs = node.get("runs")
+    if isinstance(runs, list):
+        for run in runs:
+            if isinstance(run, dict):
+                value = run.get("text")
+            else:
+                value = run
+            if value:
+                parts.append(str(value))
     formulas = node.get("formulas", node.get("lines"))
     if isinstance(formulas, list):
         parts.extend(str(item) for item in formulas)
@@ -137,6 +256,216 @@ def node_text_for_font(node: dict) -> str:
     return "\n".join(parts)
 
 
+RUN_TEXT_NODE_TYPES = {"text_block", "annotation_block", "caption_block"}
+MATH_CONTRACT_NODE_TYPES = {"math_text", "formula_text_block", "math_label_box", "math_vector"}
+TEXT_ROUTE_OVERLAP_NODE_TYPES = RUN_TEXT_NODE_TYPES | {"math_text", "math_label_box", "formula_text_block"}
+TEXT_FIT_WIDTH_MODES = {"shrink", "shrink_to_fit", "fit", "single_line", "no_wrap", "nowrap", "math_label"}
+TEXT_FIT_HEIGHT_MODES = {"shrink", "shrink_to_fit", "fit", "multi_line"}
+TEXT_FIT_SINGLE_LINE_MODES = {"single_line", "no_wrap", "nowrap", "math_label"}
+STRICT_TEXT_ROLE_TYPES = {
+    "annotation",
+    "callout",
+    "caption",
+    "edge_label",
+    "formula",
+    "header",
+    "module_title",
+    "output_label",
+    "panel_title",
+    "small_label",
+    "title",
+}
+TENSOR_PERSPECTIVE_MODES = {
+    "flat",
+    "front",
+    "light",
+    "paper_light",
+    "medium",
+    "paper_medium",
+    "strong",
+    "heavy",
+    "source_thin",
+    "source_thick",
+}
+
+
+def node_or_style_has_key(node: dict[str, Any], key: str) -> bool:
+    if key in node:
+        return True
+    style = node.get("style")
+    return isinstance(style, dict) and key in style
+
+
+def truthy(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def text_looks_like_math_content(text: str) -> bool:
+    stripped = str(text).strip()
+    if not stripped:
+        return False
+    if LOSS_FORMULA_PATTERN.search(stripped) or GENERIC_SUBSCRIPT_LABEL_PATTERN.search(stripped):
+        return True
+    if MATHISH_UNICODE_PATTERN.search(stripped):
+        return True
+    if MATHISH_PRIME_PATTERN.search(stripped):
+        return True
+    if MATHISH_HAT_PATTERN.search(stripped):
+        return True
+    if FORMULA_LIKE_PATTERN.search(stripped) and any(char.isalpha() for char in stripped):
+        return True
+    return any(token in stripped for token in ("⊕", "⊗", "∥", "∑", "∏", "≠", "≤", "≥"))
+
+
+def node_uses_math_contract(node: dict[str, Any]) -> bool:
+    node_type = str(node.get("type", "")).lower()
+    if node_type in MATH_CONTRACT_NODE_TYPES:
+        return True
+    runs = node.get("runs")
+    if not isinstance(runs, list):
+        return False
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        render_as = str(run.get("render_as", run.get("renderer", run.get("type", "")))).lower()
+        if (
+            truthy(run.get("math"), False)
+            or truthy(run.get("force_math"), False)
+            or render_as in {"math", "math_text", "formula", "formula_text", "inline_math"}
+            or str(run.get("font_role", "")).lower() == "math"
+            or str(run.get("text_role", "")).lower() in {"formula", "math", "math_label"}
+        ):
+            return True
+    return False
+
+
+def explicit_text_fit_mode(style: dict[str, Any]) -> str:
+    value = style.get("text_fit", style.get("fit_text"))
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def approximate_text_scale_ratio(
+    text: str,
+    font_size_pt: float,
+    box_width: float,
+    box_height: float,
+    fit_mode: str,
+    *,
+    angle_deg: float = 0.0,
+    margin_in: float = 0.0,
+    width_safety: float = 1.10,
+    cjk_width_safety: float = 1.18,
+) -> float | None:
+    if not str(text).strip() or font_size_pt <= 0 or box_width <= 0 or box_height <= 0:
+        return None
+    rotated = abs((angle_deg % 180) - 90) <= 1e-3
+    available_w = max(0.01, box_width - margin_in * 2)
+    available_h = max(0.01, box_height - margin_in * 2)
+    if rotated:
+        available_w, available_h = available_h, available_w
+
+    display_text = str(text)
+    if fit_mode in TEXT_FIT_SINGLE_LINE_MODES:
+        display_text = display_text.replace("\r", " ").replace("\n", " ")
+
+    scale = 1.0
+    effective_width_safety = width_safety
+    if any(ord(char) > 255 for char in display_text):
+        effective_width_safety = max(effective_width_safety, cjk_width_safety)
+
+    estimated_w, estimated_h = estimate_text_box(display_text, font_size_pt)
+    estimated_w *= effective_width_safety
+    if fit_mode in TEXT_FIT_WIDTH_MODES and estimated_w > available_w:
+        scale = min(scale, available_w / max(estimated_w, 1e-6))
+    if fit_mode in TEXT_FIT_HEIGHT_MODES and estimated_h > available_h:
+        scale = min(scale, available_h / max(estimated_h, 1e-6))
+    elif fit_mode in TEXT_FIT_SINGLE_LINE_MODES:
+        single_line_h = font_size_pt / 72.0 * 1.18
+        if single_line_h > available_h:
+            scale = min(scale, available_h / max(single_line_h, 1e-6))
+    return max(0.0, min(1.0, scale))
+
+
+def validate_text_runs_payload(
+    node: dict[str, Any],
+    node_id: str,
+    label: str,
+    errors: list[str],
+    warnings: list[str],
+    exact_mode: bool = False,
+) -> None:
+    runs = node.get("runs")
+    if runs is None:
+        return
+    if not isinstance(runs, list):
+        errors.append(f"{label} `{node_id}` runs must be an array.")
+        return
+    if not runs:
+        warnings.append(f"{label} `{node_id}` runs is empty.")
+        return
+    for index, run in enumerate(runs):
+        if isinstance(run, (str, int, float)):
+            continue
+        if not isinstance(run, dict):
+            errors.append(f"{label} `{node_id}` runs[{index}] must be an object or plain text.")
+            continue
+        if run.get("text") is not None and not isinstance(run.get("text"), (str, int, float)):
+            errors.append(f"{label} `{node_id}` runs[{index}].text must be text-like.")
+        for key in (
+            "w",
+            "width",
+            "h",
+            "height",
+            "font_size_pt",
+            "min_font_size_pt",
+            "max_font_size_pt",
+            "target_font_size_pt",
+            "baseline_offset_in",
+            "offset_x_in",
+            "x_offset_in",
+            "offset_y_in",
+            "y_offset_in",
+            "subscript_scale",
+            "subscript_offset_in",
+            "line_gap_in",
+            "short_run_width_safety_factor",
+            "short_run_min_width_in",
+        ):
+            value = run.get(key)
+            if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                errors.append(f"{label} `{node_id}` runs[{index}].{key} must be a non-negative number.")
+        for key in ("font_family", "font_role", "source_font_family", "text_fit", "render_as", "font_weight", "text_role", "semantic_role"):
+            value = run.get(key)
+            if value is not None and not isinstance(value, str):
+                errors.append(f"{label} `{node_id}` runs[{index}].{key} must be a string.")
+        candidates = run.get("font_family_candidates")
+        if candidates is not None and (
+            not isinstance(candidates, list)
+            or not all(isinstance(item, str) for item in candidates)
+        ):
+            errors.append(f"{label} `{node_id}` runs[{index}].font_family_candidates must be an array of strings.")
+        math_flag = run.get("math")
+        if math_flag is not None and not isinstance(math_flag, bool):
+            warnings.append(f"{label} `{node_id}` runs[{index}].math should be boolean.")
+        for key in ("allow_shrink", "force_single_line"):
+            value = run.get(key)
+            if value is not None and not isinstance(value, bool):
+                warnings.append(f"{label} `{node_id}` runs[{index}].{key} should be boolean.")
+
+    if exact_mode and not node.get("source_bbox_px", node.get("source_bbox")):
+        warnings.append(
+            f"Exact text node `{node_id}` uses mixed text runs without source_bbox_px/source_bbox; baseline, spacing, and anchor drift are hard to review."
+        )
+
+
 def font_validation_warnings(
     node: dict,
     style: dict[str, Any],
@@ -148,42 +477,275 @@ def font_validation_warnings(
         return []
 
     warnings: list[str] = []
-    resolution = font_resolution_for_style(style, text)
-    requested = resolution.requested
-    if requested and not installed_font_match(requested):
-        if resolution.resolved and resolution.resolved != requested:
+    def append_style_warnings(context_label: str, text_value: str, effective_style: dict[str, Any], source_font_override: Any = None) -> None:
+        if not str(text_value).strip():
+            return
+        resolution = font_resolution_for_style(effective_style, text_value)
+        requested = resolution.requested
+        if requested and not installed_font_match(requested):
+            if resolution.resolved and resolution.resolved != requested:
+                warnings.append(
+                    f"{context_label} requests font `{requested}`, which is not installed; renderer will use `{resolution.resolved}` via `{resolution.role or 'default'}` fallback."
+                )
+            else:
+                warnings.append(
+                    f"{context_label} requests font `{requested}`, which is not installed and has no matching fallback."
+                )
+        elif requested and resolution.used_fallback and resolution.resolved:
             warnings.append(
-                f"Node `{node_id}` requests font `{requested}`, which is not installed; renderer will use `{resolution.resolved}` via `{resolution.role or 'default'}` fallback."
+                f"{context_label} requested `{requested}` but renderer resolved `{resolution.resolved}`. Check whether this is an intended alias/fallback."
             )
-        else:
+
+        source_font = source_font_override or effective_style.get("source_font_family")
+        if source_font:
+            source_match = installed_font_match(source_font)
+            if source_match and resolution.resolved and normalize_font_key(source_match) != normalize_font_key(resolution.resolved):
+                warnings.append(
+                    f"{context_label} records source font `{source_font}`, which is installed as `{source_match}`, but effective render font is `{resolution.resolved}`. Set `font_family`/`font_family_candidates` to use the source font."
+                )
+            elif not source_match:
+                warnings.append(
+                    f"{context_label} records source font `{source_font}`, but it is not installed; choose a visually close `font_family_candidates` fallback."
+                )
+
+        if has_cjk_text(text_value) and resolution.resolved and resolution.resolved not in CJK_FONT_NAMES:
             warnings.append(
-                f"Node `{node_id}` requests font `{requested}`, which is not installed and has no matching fallback."
+                f"{context_label} contains CJK text but resolves to `{resolution.resolved}`; use `font_role: cjk_sans`/`cjk_serif` or a CJK-capable font to avoid Visio font substitution."
             )
-    elif requested and resolution.used_fallback and resolution.resolved:
+
+        if exact_mode and str(text_value).strip() and not (
+            effective_style.get("font_family") or effective_style.get("font_family_candidates") or effective_style.get("font_role")
+        ):
+            warnings.append(
+                f"{context_label} has text in an exact replica but no explicit font family, candidates, or role after style resolution."
+            )
+
+    append_style_warnings(f"Node `{node_id}`", text, style, style.get("source_font_family") or node.get("source_font_family"))
+
+    runs = node.get("runs")
+    if isinstance(runs, list):
+        for index, run in enumerate(runs):
+            if isinstance(run, dict):
+                run_text = str(run.get("text", "")).strip()
+                if not run_text:
+                    continue
+                run_style = merge_style(style, run.get("style") if isinstance(run.get("style"), dict) else None)
+                for key in ("font_family", "font_family_candidates", "font_role", "font_weight", "font_italic", "font_size_pt", "text_color"):
+                    if key in run:
+                        run_style[key] = run[key]
+                append_style_warnings(
+                    f"Node `{node_id}` run[{index}]",
+                    run_text,
+                    run_style,
+                    run.get("source_font_family"),
+                )
+    return warnings
+
+
+def text_fit_warnings(node: dict, style: dict[str, Any], exact_mode: bool = False) -> list[str]:
+    node_id = node.get("id", "<missing-id>")
+    node_type = node.get("type")
+    warnings: list[str] = []
+
+    def style_value(key: str, default: Any = None) -> Any:
+        node_style = node.get("style", {}) if isinstance(node.get("style"), dict) else {}
+        return node.get(key, node_style.get(key, style.get(key, default)))
+
+    def risky_text(text: str, font_size_pt: float, width: float, height: float, angle: float = 0.0) -> bool:
+        if not text.strip() or width <= 0 or height <= 0:
+            return False
+        rotated = abs((angle % 180) - 90) <= 1e-3
+        fit_width = height if rotated else width
+        fit_height = width if rotated else height
+        widest = max(approximate_text_width(line, font_size_pt) for line in text.splitlines() or [text])
+        text_h = approximate_text_height(text, font_size_pt)
+        return widest > fit_width * 0.92 or text_h > fit_height * 0.92
+
+    text = node_text_for_font(node)
+    text_role = str(node.get("text_role", node.get("semantic_role", ""))).lower()
+    if exact_mode and node_type in RUN_TEXT_NODE_TYPES and text.strip():
+        if (text_looks_like_math_content(text) or text_role in {"formula", "math", "math_label"}) and not node_uses_math_contract(node):
+            warnings.append(
+                f"Exact text node `{node_id}` contains math-like content but still uses plain `{node_type}` rendering. "
+                "Use `math_text`, `formula_text_block`, or run-based math fragments instead of ordinary text-box fallback."
+            )
+    if text and all(key in node for key in ("w", "h")):
+        try:
+            font_size = float(style.get("font_size_pt", 12))
+            angle = float(style.get("text_angle_deg", 0) or 0)
+            if risky_text(text, font_size, float(node["w"]), float(node["h"]), angle):
+                fit = style_value("text_fit", style_value("fit_text", "none"))
+                if str(fit).lower() in {"", "none", "off", "false"}:
+                    warnings.append(
+                        f"Node `{node_id}` text is likely to wrap or overflow; set `text_fit: \"shrink_to_fit\"` or use `math_text`/smaller role-specific font."
+                    )
+            if exact_mode and abs((angle % 180) - 90) <= 1e-3:
+                fit = str(style_value("text_fit", "none")).lower()
+                if fit not in TEXT_FIT_SINGLE_LINE_MODES:
+                    warnings.append(
+                        f"Exact rotated text node `{node_id}` should use a single-line text policy. "
+                        "Do width budgeting first; do not rely on generic multi-line Visio text inside a narrow vertical strip."
+                    )
+                if not any(node_or_style_has_key(node, key) for key in ("rotated_text_box_safety_factor", "rotated_text_width_budget_in", "rotated_text_inset_in")):
+                    warnings.append(
+                        f"Exact rotated text node `{node_id}` has no explicit rotated width-budget contract. "
+                        "Add `rotated_text_width_budget_in`, `rotated_text_inset_in`, or an explicit rotated text safety factor before micro-tuning."
+                    )
+        except Exception:
+            pass
+
+    if node_type in {"layer_sequence", "classifier_head"}:
+        orientation = str(node.get("orientation", style.get("orientation", "horizontal"))).lower()
+        block_angle = float(style_value("block_text_angle_deg", 90 if orientation in LAYER_SEQUENCE_HORIZONTAL_ORIENTATIONS else 0) or 0)
+        block_fit = str(style_value("block_text_fit", "none")).lower()
+        frame_visible = style_value("frame_visible", True)
+        title = str(node.get("title", node.get("text", ""))).strip()
+        if frame_visible is False and title:
+            warnings.append(
+                f"{node_type} `{node_id}` has `frame_visible: false` but also a title/text; the title will still render without an enclosing module frame."
+            )
+        if block_fit in {"", "none", "off", "false"}:
+            warnings.append(f"{node_type} `{node_id}` has no block_text_fit; repeated layer labels may wrap or split.")
+        blocks = node.get("blocks", [])
+        if isinstance(blocks, list):
+            labels = []
+            for block in blocks:
+                if isinstance(block, dict):
+                    labels.append(str(block.get("text", block.get("label", ""))))
+                    if all(isinstance(node.get(key), (int, float)) for key in ("w", "h")):
+                        block_w = block.get("w", block.get("width"))
+                        block_h = block.get("h", block.get("height"))
+                        if isinstance(block_w, (int, float)) and float(block_w) > float(node["w"]) * 1.25:
+                            warnings.append(
+                                f"{node_type} `{node_id}` block `{block.get('text', block.get('label', '<unnamed>'))}` width exceeds the parent width; "
+                                "pixel-scene nested block sizes may be unscaled."
+                            )
+                        if isinstance(block_h, (int, float)) and float(block_h) > float(node["h"]) * 1.25:
+                            warnings.append(
+                                f"{node_type} `{node_id}` block `{block.get('text', block.get('label', '<unnamed>'))}` height exceeds the parent height; "
+                                "pixel-scene nested block sizes may be unscaled."
+                            )
+                else:
+                    labels.append(str(block))
+            if any(len(label) >= 7 for label in labels) and abs((block_angle % 180) - 90) <= 1e-3 and block_fit not in {"single_line", "no_wrap", "nowrap", "math_label"}:
+                warnings.append(
+                    f"{node_type} `{node_id}` has long rotated layer labels; use `block_text_fit: \"single_line\"` with a small block font."
+                )
+            if abs((block_angle % 180) - 90) <= 1e-3:
+                constrain_text = style_value("block_constrain_text_box", None)
+                if constrain_text is not True:
+                    warnings.append(
+                        f"{node_type} `{node_id}` has rotated layer labels without `block_constrain_text_box: true`; Visio may expand/crop the label outside the strip."
+                    )
+                if exact_mode and not any(
+                    node_or_style_has_key(node, key)
+                    for key in ("block_font_size_pt", "block_min_font_size_pt", "rotated_text_width_budget_in", "rotated_text_inset_in")
+                ):
+                    warnings.append(
+                        f"{node_type} `{node_id}` has rotated strip labels but no explicit width-budget contract. "
+                        "Set narrow-strip text parameters before rendering instead of waiting for broken vertical text."
+                    )
+
+    if node_type == "token_grid":
+        cell_fit = str(style_value("cell_text_fit", "none")).lower()
+        if cell_fit in {"", "none", "off", "false"}:
+            warnings.append(f"Token grid `{node_id}` has no cell_text_fit; numbered cells can overlap in dense matrices.")
+
+    if node_type == "math_text":
+        fit = str(style_value("text_fit", "none")).lower()
+        if fit in {"", "none", "off", "false"}:
+            warnings.append(f"Math text `{node_id}` has no text_fit; subscript labels and formulas may wrap in Visio.")
+
+    if node_type == "math_label_box":
+        text = node_text_for_font(node)
+        if "_" not in text and not any(char in text for char in {"′", "'", "^"}):
+            warnings.append(f"Math label box `{node_id}` has no visible subscript/prime marker; use a normal text block unless the source uses math styling.")
+
+    if node_type == "probability_bar_list":
+        items = node.get("items", node.get("rows", []))
+        if not items and not str(node.get("text", "")).strip():
+            warnings.append(f"Probability bar list `{node_id}` has no rows/items; it may render as an empty rounded panel.")
+        style_dict = node.get("style", {}) if isinstance(node.get("style"), dict) else {}
+        anchor = str(node.get("bar_value_anchor", style_dict.get("bar_value_anchor", style_value("bar_value_anchor", "")))).lower()
+        if any(isinstance(item, dict) and item.get("bar_value_label") for item in items or []):
+            if anchor not in {"bar_area", "row", "panel", "inner", "after_axis", "plot", "after_bar", "bar_end", "bar_right", "before_bar", "bar_left"}:
+                warnings.append(
+                    f"Probability bar list `{node_id}` has inline bar value labels without `bar_value_anchor`; "
+                    "use `bar_area` or `row` so row text does not collide with the visible bar."
+                )
+            if anchor in {"bar_area", "plot"} and float(style_dict.get("bar_max_fraction", node.get("bar_max_fraction", 1)) or 1) >= 0.98:
+                warnings.append(
+                    f"Probability bar list `{node_id}` places row text over the full bar area with full-length bars; set `bar_max_fraction` below 1 or use `bar_value_anchor: \"after_bar\"` when visual review reports text/bar overlap."
+                )
+            if float(style_dict.get("bar_value_offset_x_in", node.get("bar_value_offset_x_in", 0)) or 0) > 0:
+                warnings.append(
+                    f"Probability bar list `{node_id}` offsets value labels into the bars; visual review often reports this as text/bar overlap."
+                )
+
+    if node_type == "dual_wing_encoder":
+        raw_points = node.get("points")
+        shape_mode = str(node.get("shape_mode", style.get("shape_mode", "three_part"))).lower()
+        if raw_points and shape_mode == "three_part":
+            warnings.append(
+                f"Dual wing encoder `{node_id}` has custom points but no shape_mode; use `shape_mode: \"custom_polygon\"` or `opposing_trapezoids` so the intended paper shape is explicit."
+            )
+        if shape_mode in {"opposing_trapezoids", "hourglass", "pinched"} and node.get("center_ratio", style.get("center_ratio")) is None:
+            warnings.append(
+                f"Dual wing encoder `{node_id}` uses {shape_mode} without center_ratio; set a narrow center strip ratio for source-like encoder modules."
+            )
+
+    return warnings
+
+
+def strict_text_shrink_warnings(node: dict[str, Any], style: dict[str, Any], exact_mode: bool) -> list[str]:
+    if not exact_mode or not all(isinstance(node.get(key), (int, float)) for key in ("w", "h")):
+        return []
+
+    text = node_text_for_font(node).strip()
+    if not text:
+        return []
+
+    fit_mode = explicit_text_fit_mode(style)
+    if fit_mode not in (TEXT_FIT_WIDTH_MODES | TEXT_FIT_HEIGHT_MODES):
+        return []
+
+    try:
+        font_size = float(style.get("font_size_pt", 12) or 12)
+        min_font = float(style.get("min_font_size_pt", style.get("text_min_font_size_pt", max(6.0, font_size * 0.55))) or max(6.0, font_size * 0.55))
+        angle = float(style.get("text_angle_deg", 0) or 0)
+        margin = float(style.get("text_fit_margin_in", style.get("text_margin_in", 0.02)) or 0.0)
+        width_safety = float(style.get("text_width_safety_factor", style.get("single_line_width_safety_factor", 1.10)) or 1.0)
+        cjk_safety = float(style.get("cjk_text_width_safety_factor", 1.18) or 1.18)
+    except (TypeError, ValueError):
+        return []
+
+    scale_ratio = approximate_text_scale_ratio(
+        text,
+        font_size,
+        float(node["w"]),
+        float(node["h"]),
+        fit_mode,
+        angle_deg=angle,
+        margin_in=margin,
+        width_safety=width_safety,
+        cjk_width_safety=cjk_safety,
+    )
+    if scale_ratio is None:
+        return []
+
+    warnings: list[str] = []
+    text_role = str(node.get("text_role", node.get("semantic_role", ""))).lower()
+    tight_threshold = 0.78 if text_role in STRICT_TEXT_ROLE_TYPES or node.get("type") in (RUN_TEXT_NODE_TYPES | {"math_text", "formula_text_block"}) else 0.68
+    min_ratio = min(1.0, min_font / max(font_size, 1e-6))
+    if fit_mode in TEXT_FIT_SINGLE_LINE_MODES and scale_ratio < tight_threshold:
         warnings.append(
-            f"Node `{node_id}` requested `{requested}` but renderer resolved `{resolution.resolved}`. Check whether this is an intended alias/fallback."
+            f"Exact text node `{node.get('id')}` would need roughly {scale_ratio:.0%} font scaling to stay on one line. "
+            "Widen the source-bound bbox, split into runs, or rebuild the local text layout instead of relying on heavy shrink."
         )
-
-    source_font = style.get("source_font_family") or node.get("source_font_family")
-    if source_font:
-        source_match = installed_font_match(source_font)
-        if source_match and resolution.resolved and normalize_font_key(source_match) != normalize_font_key(resolution.resolved):
-            warnings.append(
-                f"Node `{node_id}` records source font `{source_font}`, which is installed as `{source_match}`, but effective render font is `{resolution.resolved}`. Set `font_family`/`font_family_candidates` to use the source font."
-            )
-        elif not source_match:
-            warnings.append(
-                f"Node `{node_id}` records source font `{source_font}`, but it is not installed; choose a visually close `font_family_candidates` fallback."
-            )
-
-    if has_cjk_text(text) and resolution.resolved and resolution.resolved not in CJK_FONT_NAMES:
+    if fit_mode in TEXT_FIT_SINGLE_LINE_MODES and min_ratio < 0.58 and len(text.replace('\n', ' ').strip()) >= 4:
         warnings.append(
-            f"Node `{node_id}` contains CJK text but resolves to `{resolution.resolved}`; use `font_role: cjk_sans`/`cjk_serif` or a CJK-capable font to avoid Visio font substitution."
-        )
-
-    if exact_mode and text.strip() and not (style.get("font_family") or style.get("font_family_candidates") or style.get("font_role")):
-        warnings.append(
-            f"Node `{node_id}` has text in an exact replica but no explicit font family, candidates, or role after style resolution."
+            f"Exact text node `{node.get('id')}` allows shrink down to about {min_ratio:.0%} of its requested font size. "
+            "Single-line strict replica text should not pass only by aggressive font compression."
         )
     return warnings
 
@@ -443,6 +1005,14 @@ def text_has_raw_loss_subscript(text: str) -> bool:
     )
 
 
+def text_has_generic_subscript_label(text: str) -> bool:
+    return bool(GENERIC_SUBSCRIPT_LABEL_PATTERN.search(str(text)))
+
+
+def text_has_hat_notation(text: str) -> bool:
+    return COMBINING_CIRCUMFLEX in str(text) or bool(re.search(r"\b[A-Za-z]\^", str(text)))
+
+
 def text_has_compact_loss_notation(text: str) -> bool:
     return bool(COMPACT_LOSS_FORMULA_PATTERN.search(str(text))) and "_" not in str(text)
 
@@ -483,6 +1053,40 @@ def point_in_box(point: tuple[float, float], box: tuple[float, float, float, flo
     x, y = point
     x1, y1, x2, y2 = box
     return x1 - tolerance <= x <= x2 + tolerance and y1 - tolerance <= y <= y2 + tolerance
+
+
+def segment_crosses_box(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    box: tuple[float, float, float, float],
+    clearance: float = 0.0,
+) -> bool:
+    x1, y1, x2, y2 = expanded_box(box, -clearance) if clearance else box
+    sx, sy = start
+    ex, ey = end
+    dx = ex - sx
+    dy = ey - sy
+    p = [-dx, dx, -dy, dy]
+    q = [sx - x1, x2 - sx, sy - y1, y2 - sy]
+    u1 = 0.0
+    u2 = 1.0
+    for pi, qi in zip(p, q):
+        if abs(pi) <= 1e-12:
+            if qi < 0:
+                return False
+            continue
+        ratio = qi / pi
+        if pi < 0:
+            if ratio > u2:
+                return False
+            u1 = max(u1, ratio)
+        else:
+            if ratio < u1:
+                return False
+            u2 = min(u2, ratio)
+    if u1 > u2:
+        return False
+    return u2 > 0.0 and u1 < 1.0
 
 
 def segment_has_diagonal(start: tuple[float, float], end: tuple[float, float]) -> bool:
@@ -741,20 +1345,200 @@ def source_aspect_ratio(metadata: dict, warnings: list[str]) -> float | None:
         return None
 
 
-def validate_fidelity_metadata(scene: dict, warnings: list[str]) -> None:
+def validate_fidelity_metadata(
+    scene: dict,
+    warnings: list[str],
+    errors: list[str] | None = None,
+    strict_contract: bool = False,
+) -> None:
     metadata = scene.get("metadata", {})
     if not isinstance(metadata, dict):
         return
-    fidelity = str(metadata.get("fidelity", metadata.get("reconstruction_mode", ""))).lower()
-    exact_mode = fidelity in {"exact", "strict", "replica", "reconstruction", "1:1"}
-    if not exact_mode:
+    if not exact_mode_from_metadata(metadata):
         return
 
+    def contract_issue(message: str) -> None:
+        if strict_contract and errors is not None:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
     if not metadata.get("source_image") and not metadata.get("source_aspect_ratio"):
-        warnings.append(
+        contract_issue(
             "Exact reconstruction mode needs metadata.source_image or metadata.source_aspect_ratio; "
             "otherwise page proportions cannot be checked against the source."
         )
+    review_mode = str(metadata.get("replica_review_mode", metadata.get("review_mode", ""))).lower()
+    if not review_mode:
+        contract_issue(
+            "Exact reconstruction should set `metadata.replica_review_mode`, typically `strict_replica`, so semantic redraw and source-faithful review are not confused."
+        )
+    elif review_mode not in STRICT_REPLICA_REVIEW_MODES:
+        contract_issue(
+            f"Exact reconstruction uses replica_review_mode `{review_mode}`. Use a strict replica mode instead of a semantic-redraw review contract."
+        )
+    replica_stage = str(metadata.get("replica_stage", metadata.get("production_stage", ""))).lower()
+    if not replica_stage:
+        contract_issue(
+            "Exact reconstruction should set `metadata.replica_stage` such as `layout_topology` or `detail_polish`; the workflow is intentionally two-stage."
+        )
+    elif replica_stage not in {"layout_topology", "detail_polish"}:
+        contract_issue(
+            f"Exact reconstruction uses unsupported replica_stage `{replica_stage}`. Use `layout_topology` or `detail_polish`."
+        )
+
+    if metadata.get("starter_template") or str(metadata.get("starter_mode", "")).lower() == "template_seed":
+        contract_issue(
+            "Exact reconstruction metadata records a template-seeded start. Strict capability evaluation must rebuild from a blank source-driven scene instead of validating a template bootstrap."
+        )
+    autofix_history = metadata.get("autofix_history")
+    if isinstance(autofix_history, list) and autofix_history:
+        contract_issue(
+            "Exact reconstruction metadata records recipe/autofix rewrites. Strict capability evaluation must review a freshly authored scene, not a scene rewritten by scene_autofix or pre-render recipes."
+        )
+
+    inventory = metadata.get("source_visual_inventory")
+    nodes = scene.get("nodes", []) if isinstance(scene.get("nodes"), list) else []
+    caption_required = any(
+        (
+            node.get("type") == "caption_block"
+            or (
+                isinstance(node.get("text"), str)
+                and len(str(node.get("text", "")).strip()) >= 8
+                and any(token in str(node.get("text", "")) for token in ("Fig.", "Figure", "图"))
+            )
+        )
+        for node in nodes
+        if isinstance(node, dict)
+    )
+    required_categories = list(STRICT_REQUIRED_REGION_CATEGORIES)
+    if caption_required:
+        required_categories.append("caption")
+    if not isinstance(inventory, dict):
+        contract_issue(
+            "Exact reconstruction should record `metadata.source_visual_inventory` from visual LLM source-image analysis before scene authoring; "
+            "region_plan alone cannot prevent semantic redraw drift."
+        )
+    else:
+        analysis_basis = str(inventory.get("analysis_basis", "")).lower()
+        if "visual" not in analysis_basis or "source" not in analysis_basis:
+            contract_issue(
+                "metadata.source_visual_inventory.analysis_basis should state that the source image was inspected visually, e.g. `visual_llm_source_image`."
+            )
+        if inventory.get("do_not_translate") is not True:
+            contract_issue(
+                "metadata.source_visual_inventory.do_not_translate should be true for exact replicas so source labels are not silently translated or normalized."
+            )
+        unknown_policy = str(inventory.get("unknown_text_policy", "")).lower()
+        if "unreadable" not in unknown_policy or "invent" not in unknown_policy:
+            contract_issue(
+                "metadata.source_visual_inventory.unknown_text_policy should require marking unreadable text instead of inventing replacements."
+            )
+        authoring_mode = str(inventory.get("scene_authoring_mode", "")).lower()
+        prior_policy = str(inventory.get("prior_scene_policy", "")).lower()
+        if "fresh" not in authoring_mode or "source" not in authoring_mode:
+            contract_issue(
+                "metadata.source_visual_inventory.scene_authoring_mode should make clear that this scene was authored fresh from the source inventory."
+            )
+        if prior_policy and not any(token in prior_policy for token in ("do_not", "not", "no")):
+            contract_issue(
+                "metadata.source_visual_inventory.prior_scene_policy should forbid reading or patching a prior-round scene during capability evaluation."
+            )
+        regions = inventory.get("regions")
+        if not isinstance(regions, list) or len(regions) < 3:
+            contract_issue(
+                "metadata.source_visual_inventory.regions should list source-inspected regions; dense exact figures usually need global/input/core/output/arrow-dense/small-text coverage."
+            )
+        else:
+            inventory_region_text = ""
+            inventory_coverage: set[str] = set()
+            inventory_source_boxes: dict[str, tuple[float, float, float, float]] = {}
+            for index, region in enumerate(regions):
+                if not isinstance(region, dict):
+                    contract_issue(f"metadata.source_visual_inventory.regions[{index}] should be an object.")
+                    continue
+                categories = region_categories(region, include_required_crop_types=True)
+                inventory_coverage.update(categories)
+                inventory_region_text += " " + " ".join(
+                    str(value)
+                    for value in (
+                        region.get("id", ""),
+                        region.get("name", ""),
+                        " ".join(str(item) for item in region.get("required_crop_types", []) if isinstance(item, str))
+                        if isinstance(region.get("required_crop_types"), list)
+                        else "",
+                    )
+                ).lower()
+                if not (region.get("id") or region.get("name")):
+                    contract_issue(f"metadata.source_visual_inventory.regions[{index}] needs an id/name.")
+                source_sig = bbox_signature(region.get("source_bbox_px", region.get("source_bbox", region.get("bbox_px"))))
+                if source_sig is None:
+                    contract_issue(
+                        f"metadata.source_visual_inventory.regions[{index}] should include source_bbox_px/source_bbox so review crops bind to the source image."
+                    )
+                else:
+                    for category in categories:
+                        inventory_source_boxes.setdefault(category, source_sig)
+                text_layout = region.get("text_layout_facts")
+                if text_layout is not None and not isinstance(text_layout, list):
+                    contract_issue(
+                        f"metadata.source_visual_inventory.regions[{index}].text_layout_facts should be an array of source typography/layout facts."
+                    )
+                for key in ("box_style_facts", "line_style_facts", "shadow_facts", "density_facts"):
+                    value = region.get(key)
+                    if value is not None and not isinstance(value, list):
+                        contract_issue(
+                            f"metadata.source_visual_inventory.regions[{index}].{key} should be an array of source-visible style facts."
+                        )
+                crop_targets = region.get("required_crop_types")
+                if crop_targets is not None and not isinstance(crop_targets, list):
+                    contract_issue(
+                        f"metadata.source_visual_inventory.regions[{index}].required_crop_types should be an array."
+                    )
+                has_visible_contract = any(
+                    isinstance(region.get(key), list) and len(region.get(key, [])) > 0
+                    for key in (
+                        "required_labels",
+                        "required_formulas",
+                        "required_component_motifs",
+                        "required_edge_motifs",
+                        "required_ports_or_boundaries",
+                    )
+                )
+                if not has_visible_contract:
+                    contract_issue(
+                        f"metadata.source_visual_inventory.regions[{index}] has no required labels/formulas/component motifs/edge motifs/ports; "
+                        "the scene can drift into a generic redraw without a visible-source contract."
+                    )
+                has_style_contract = any(
+                    isinstance(region.get(key), list) and len(region.get(key, [])) > 0
+                    for key in ("box_style_facts", "line_style_facts", "shadow_facts", "density_facts")
+                )
+                if not has_style_contract:
+                    contract_issue(
+                        f"metadata.source_visual_inventory.regions[{index}] has no box/line/shadow/density facts. "
+                        "Exact review needs explicit style facts for padding, rounding, shadow, line weight, or density, not only labels."
+                    )
+            missing_inventory_categories = [category for category in required_categories if category not in inventory_coverage]
+            if missing_inventory_categories:
+                contract_issue(
+                    f"metadata.source_visual_inventory.regions misses review coverage for `{', '.join(missing_inventory_categories)}`."
+                )
+            global_inventory_box = inventory_source_boxes.get("global")
+            for category in ("input", "core", "output", "arrow_dense", "small_text", "caption"):
+                if global_inventory_box and inventory_source_boxes.get(category) == global_inventory_box:
+                    contract_issue(
+                        f"metadata.source_visual_inventory region coverage for `{category}` reuses the global source bbox; strict review crops must be source-bound local regions."
+                    )
+            trio_inventory = [inventory_source_boxes.get(category) for category in ("input", "core", "output")]
+            if all(box is not None for box in trio_inventory) and len(set(trio_inventory)) < 3:
+                contract_issue(
+                    "metadata.source_visual_inventory input/core/output source bboxes are not distinct; strict regional review would collapse into repeated crops."
+                )
+            if caption_required and "caption" not in inventory_region_text:
+                contract_issue(
+                    "Exact reconstruction includes a caption-like node but source_visual_inventory.regions does not advertise caption crop coverage."
+                )
 
     page = scene.get("page", {})
     if not isinstance(page, dict):
@@ -770,10 +1554,78 @@ def validate_fidelity_metadata(scene: dict, warnings: list[str]) -> None:
     page_ratio = float(page_width) / float(page_height)
     delta = abs(page_ratio - src_ratio) / src_ratio
     if delta > ASPECT_RATIO_TOLERANCE:
-        warnings.append(
+        contract_issue(
             f"Page aspect ratio {page_ratio:.3f} differs from source {src_ratio:.3f} by {delta:.1%}; "
             "exact reconstruction should preserve the source canvas ratio before tuning coordinates."
         )
+
+    region_plan = metadata.get("region_plan", metadata.get("source_region_plan", metadata.get("source_regions")))
+    if region_plan is None:
+        contract_issue(
+            "Exact reconstruction should record `metadata.region_plan` with source/target bboxes for global, input, core, output, arrow-dense, small-text, and boundary review regions."
+        )
+    elif not isinstance(region_plan, list):
+        contract_issue("metadata.region_plan should be an array of region objects with id/name and source_bbox_px/target_bbox.")
+    else:
+        plan_text = ""
+        plan_coverage: set[str] = set()
+        plan_source_boxes: dict[str, tuple[float, float, float, float]] = {}
+        if len(region_plan) < 3:
+            contract_issue(
+                f"metadata.region_plan has only {len(region_plan)} regions; dense exact figures need explicit source bboxes for multiple review crops."
+            )
+        for index, region in enumerate(region_plan):
+            if not isinstance(region, dict):
+                contract_issue(f"metadata.region_plan[{index}] should be an object.")
+                continue
+            categories = region_categories(region)
+            plan_coverage.update(categories)
+            plan_text += " " + " ".join(
+                str(value)
+                for value in (
+                    region.get("id", ""),
+                    region.get("name", ""),
+                    region.get("crop_type", ""),
+                    region.get("review_crop_type", ""),
+                    region.get("review_focus", ""),
+                )
+            ).lower()
+            if not (region.get("id") or region.get("name")):
+                contract_issue(f"metadata.region_plan[{index}] needs an id/name so visual review can refer to it.")
+            source_sig = bbox_signature(region.get("source_bbox_px", region.get("source_bbox", region.get("bbox_px"))))
+            has_target = any(region.get(key) is not None for key in ("target_bbox", "target_bbox_in", "scene_bbox", "node_id", "container_id"))
+            if source_sig is None or not has_target:
+                contract_issue(
+                    f"metadata.region_plan[{index}] should bind a source bbox to a target bbox/container; otherwise density drift is hard to review."
+                )
+            else:
+                for category in categories:
+                    plan_source_boxes.setdefault(category, source_sig)
+            crop_type = str(region.get("crop_type", region.get("review_crop_type", ""))).lower()
+            if not crop_type:
+                contract_issue(
+                    f"metadata.region_plan[{index}] should record crop_type/review_crop_type so QA can generate the intended regional crop."
+                )
+        missing_plan_categories = [category for category in required_categories if category not in plan_coverage]
+        if missing_plan_categories:
+            contract_issue(
+                f"metadata.region_plan misses strict review regions `{', '.join(missing_plan_categories)}`."
+            )
+        global_plan_box = plan_source_boxes.get("global")
+        for category in ("input", "core", "output", "arrow_dense", "small_text", "caption"):
+            if global_plan_box and plan_source_boxes.get(category) == global_plan_box:
+                contract_issue(
+                    f"metadata.region_plan coverage for `{category}` reuses the global source bbox; strict review assets must include source-bound local crops."
+                )
+        trio_plan = [plan_source_boxes.get(category) for category in ("input", "core", "output")]
+        if all(box is not None for box in trio_plan) and len(set(trio_plan)) < 3:
+            contract_issue(
+                "metadata.region_plan input/core/output source bboxes are not distinct; strict review would collapse into repeated crops."
+            )
+        if caption_required and "caption" not in plan_text:
+            contract_issue(
+                "Exact reconstruction includes caption-like content but metadata.region_plan has no caption crop region."
+            )
 
 
 NON_RENDERED_OR_TINY_TYPES = {
@@ -783,6 +1635,7 @@ NON_RENDERED_OR_TINY_TYPES = {
     "boundary_port",
     "bracket",
     "merge_bus",
+    "multi_port_junction",
     "boundary_fanout",
 }
 
@@ -797,12 +1650,14 @@ TEXT_OVERFLOW_SKIP_TYPES = {
     "grid_matrix",
     "bracket",
     "merge_bus",
+    "multi_port_junction",
     "boundary_fanout",
     "classifier_head",
     "wave_signal",
     "modality_spine",
     "math_vector",
     "math_text",
+    "caption_block",
     "tfr_panel",
 }
 
@@ -921,6 +1776,41 @@ def tfr_panel_layout_issues(nodes_by_id: dict[str, dict], node_types_by_id: dict
     return issues
 
 
+def exact_text_route_overlap_warnings(
+    route_points: list[tuple[float, float]],
+    edge_id: str,
+    edge: dict,
+    nodes_by_id: dict[str, dict],
+    node_types_by_id: dict[str, str],
+) -> list[str]:
+    if edge.get("allow_text_overlap"):
+        return []
+    warnings: list[str] = []
+    edge_endpoint_ids = {
+        base_node_id(value)
+        for value in (edge.get("from"), edge.get("to"))
+        if isinstance(value, str) and base_node_id(value) in nodes_by_id
+    }
+    for text_node_id, text_node in nodes_by_id.items():
+        if text_node_id in edge_endpoint_ids:
+            continue
+        if node_types_by_id.get(text_node_id) not in TEXT_ROUTE_OVERLAP_NODE_TYPES:
+            continue
+        if is_background_node(text_node) or not has_valid_box(text_node):
+            continue
+        text_value = str(text_node.get("text", text_node.get("label", text_node.get("lines", "")))).strip()
+        if not text_value:
+            continue
+        text_box = expanded_box(node_box(text_node), 0.015)
+        if any(segment_crosses_box(start, end, text_box, clearance=0.0) for start, end in zip(route_points, route_points[1:])):
+            warnings.append(
+                f"Edge `{edge_id}` crosses text/formula node `{text_node_id}`. Exact replicas should route around labels or move the label anchor; "
+                "visual review treats line-through-text as a blocking/important defect."
+            )
+            break
+    return warnings
+
+
 def safe_node_style(
     node: dict[str, Any],
     component_map: dict[str, Any],
@@ -995,12 +1885,56 @@ def validate_large_figure_discipline(
     for node_id, container_id in containers_by_node.items():
         if container_id and node_id in visible_ids:
             children_by_container.setdefault(container_id, []).append(node_id)
+    containers_by_id = {str(node.get("id")): node for node in containers if node.get("id")}
     for container_id, child_ids in sorted(children_by_container.items()):
         if len(child_ids) > 18:
             warnings.append(
                 f"Region `{container_id}` contains {len(child_ids)} visible nodes; split it into smaller "
                 "`audit_region` subregions or create a local subscene first, then assemble it into the full page."
             )
+        container = containers_by_id.get(container_id)
+        if container and has_valid_box(container):
+            area = max(0.001, float(container["w"]) * float(container["h"]))
+            density = len(child_ids) / area
+            expected = container.get("expected_node_density", container.get("source_node_density"))
+            if expected is not None:
+                try:
+                    expected_f = float(expected)
+                    if expected_f > 0:
+                        ratio = density / expected_f
+                        if ratio < 0.55 or ratio > 1.85:
+                            warnings.append(
+                                f"Region `{container_id}` density {density:.2f} nodes/sq in differs from expected {expected_f:.2f}; "
+                                "check source bbox/target bbox scale before tuning individual nodes."
+                            )
+                except (TypeError, ValueError):
+                    warnings.append(f"Region `{container_id}` expected_node_density/source_node_density must be numeric.")
+            if float(container["w"]) > 0 and float(container["h"]) > 0:
+                container_ratio = float(container["w"]) / float(container["h"])
+                source_ratio = container.get("source_aspect_ratio")
+                source_bbox = container.get("source_bbox_px", container.get("source_bbox"))
+                if source_ratio is None and isinstance(source_bbox, list) and len(source_bbox) == 4:
+                    try:
+                        bbox_w = abs(float(source_bbox[2]) - float(source_bbox[0]))
+                        bbox_h = abs(float(source_bbox[3]) - float(source_bbox[1]))
+                        if bbox_h > 0:
+                            source_ratio = bbox_w / bbox_h
+                    except (TypeError, ValueError):
+                        source_ratio = None
+                if source_ratio is not None:
+                    try:
+                        source_ratio_f = float(source_ratio)
+                        if source_ratio_f > 0 and abs(container_ratio - source_ratio_f) / source_ratio_f > 0.22:
+                            warnings.append(
+                                f"Region `{container_id}` aspect {container_ratio:.2f} differs from source region {source_ratio_f:.2f}; "
+                                "fix region bbox before local visual polishing."
+                            )
+                    except (TypeError, ValueError):
+                        warnings.append(f"Region `{container_id}` source_aspect_ratio must be numeric.")
+                elif complex_scene and container.get("type") != "audit_region":
+                    warnings.append(
+                        f"Region `{container_id}` has no source_bbox_px/source_aspect_ratio; visual review cannot distinguish source scale drift from renderer issues."
+                    )
 
     font_sizes_by_type: dict[str, list[tuple[str, float]]] = {}
     for node_id in visible_ids:
@@ -1093,10 +2027,9 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
     component_map = load_component_map()
     node_types = set(component_map["node_types"])
     edge_types = set(component_map["edge_types"])
-    validate_fidelity_metadata(scene, warnings)
+    validate_fidelity_metadata(scene, warnings, errors=errors, strict_contract=strict)
     metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
-    fidelity = str(metadata.get("fidelity", metadata.get("reconstruction_mode", ""))).lower()
-    exact_mode = fidelity in {"exact", "strict", "replica", "reconstruction", "1:1"}
+    exact_mode = exact_mode_from_metadata(metadata)
 
     required_top = ["version", "page", "nodes", "edges", "assets"]
     for key in required_top:
@@ -1218,12 +2151,111 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                             errors.append(
                                 f"Bracket `{node_id}` tick_positions[{index}] must be a number in [0, 1]."
                             )
+            for key in ("waist_ratio", "curl_ratio", "neck_ratio"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or not 0 <= float(value) <= 1):
+                    errors.append(f"Bracket `{node_id}` {key} must be a number in [0, 1].")
+
+        if node_type == "brace_merge":
+            orientation = str(node.get("orientation", "right")).lower()
+            if orientation not in {"left", "right", "up", "down"}:
+                errors.append(f"Brace merge `{node_id}` has unsupported orientation `{orientation}`.")
+            for key in ("waist_ratio", "curl_ratio", "neck_ratio", "curve_tightness"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or not 0 <= float(value) <= 1):
+                    errors.append(f"Brace merge `{node_id}` {key} must be a number in [0, 1].")
+            for key in ("waist_width_in", "tick_length_in"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                    errors.append(f"Brace merge `{node_id}` {key} must be a non-negative number.")
+            tick_positions = node.get("tick_positions", node.get("port_positions"))
+            if tick_positions is not None:
+                if not isinstance(tick_positions, list):
+                    errors.append(f"Brace merge `{node_id}` tick_positions/port_positions must be an array.")
+                elif not all(isinstance(item, (int, float)) and 0 <= float(item) <= 1 for item in tick_positions):
+                    errors.append(f"Brace merge `{node_id}` tick positions must be numbers in [0, 1].")
+
+        if node_type == "concat_operator":
+            orientation = str(node.get("orientation", "vertical")).lower()
+            if orientation not in {"vertical", "v", "horizontal", "h"}:
+                errors.append(f"Concat operator `{node_id}` orientation must be vertical or horizontal.")
+            for key in ("tick_in", "gap_ratio"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                    errors.append(f"Concat operator `{node_id}` {key} must be a non-negative number.")
+            glyph_mode = str(node.get("glyph_mode", (node.get("style", {}) if isinstance(node.get("style"), dict) else {}).get("glyph_mode", "bracket_pair"))).lower()
+            if glyph_mode not in {
+                "bracket_pair",
+                "brackets",
+                "stroke",
+                "strokes",
+                "boxed",
+                "box",
+                "square_box",
+                "rect",
+                "glyph",
+                "text",
+                "literal",
+                "solid_bracket",
+                "bold_bracket",
+                "source_bracket",
+                "paper_bracket",
+            }:
+                warnings.append(
+                    f"Concat operator `{node_id}` uses unknown glyph_mode `{glyph_mode}`; expected bracket_pair, boxed, or glyph."
+                )
+            concat_size_tier = node.get("concat_size_tier", node.get("style", {}).get("concat_size_tier") if isinstance(node.get("style"), dict) else None)
+            if concat_size_tier is not None and str(concat_size_tier).lower() not in CONCAT_SIZE_TIERS:
+                errors.append(f"Concat operator `{node_id}` has unsupported concat_size_tier `{concat_size_tier}`.")
+            if exact_mode and not node_or_style_has_key(node, "glyph_mode"):
+                warnings.append(
+                    f"Concat operator `{node_id}` has no explicit glyph_mode. "
+                    "Use `source_bracket`, bracket_pair, or text glyph explicitly so concat does not fall back to a generic box-like mark."
+                )
+            if exact_mode and not any(node_or_style_has_key(node, key) for key in ("concat_size_tier", "tick_in", "gap_ratio")):
+                warnings.append(
+                    f"Concat operator `{node_id}` has no explicit bracket sizing contract. "
+                    "Set `concat_size_tier` or explicit tick/gap values before coordinate polishing."
+                )
 
         if node_type == "junction_point":
             if dimensions.get("w", 0.0) > 0.2 or dimensions.get("h", 0.0) > 0.2:
                 warnings.append(
                     f"Junction point `{node_id}` is larger than usual; keep merge/fan points tiny."
                 )
+
+        if node_type == "multi_port_junction":
+            orientation = str(node.get("orientation", (node.get("style", {}) if isinstance(node.get("style"), dict) else {}).get("orientation", "vertical"))).lower()
+            if orientation not in {"vertical", "v", "horizontal", "h", "row"}:
+                errors.append(f"Multi-port junction `{node_id}` orientation must be vertical or horizontal.")
+            ports = node.get("ports")
+            if ports is not None:
+                if not isinstance(ports, list):
+                    errors.append(f"Multi-port junction `{node_id}` ports must be an array.")
+                else:
+                    for index, port in enumerate(ports):
+                        if not isinstance(port, dict):
+                            errors.append(f"Multi-port junction `{node_id}` ports[{index}] must be an object.")
+                            continue
+                        position = port.get("position", 0.5)
+                        if not isinstance(position, (int, float)):
+                            errors.append(f"Multi-port junction `{node_id}` ports[{index}].position must be numeric.")
+                        side = str(port.get("side", "")).lower()
+                        if side and side not in {"left", "right", "top", "bottom"}:
+                            errors.append(f"Multi-port junction `{node_id}` ports[{index}].side is unsupported.")
+                        length = port.get("length_in", port.get("port_length_in"))
+                        if length is not None and (not isinstance(length, (int, float)) or float(length) < 0):
+                            errors.append(f"Multi-port junction `{node_id}` ports[{index}].length_in must be non-negative.")
+            positions = node.get("port_positions", node.get("positions"))
+            if positions is not None:
+                if not isinstance(positions, list):
+                    errors.append(f"Multi-port junction `{node_id}` port_positions/positions must be an array.")
+                elif not all(isinstance(item, (int, float)) for item in positions):
+                    errors.append(f"Multi-port junction `{node_id}` port_positions/positions must contain only numbers.")
+            for key in ("port_length_in", "marker_size_in"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                    errors.append(f"Multi-port junction `{node_id}` {key} must be a non-negative number.")
 
         if node_type == "group_container":
             shape = str(node.get("shape", node.get("container_shape", "rectangle"))).lower()
@@ -1300,6 +2332,39 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     f"Text block `{node_id}` contains raw underscore loss notation. "
                     "Use `math_text` or explicit text runs so `L_adv`/`L_rec` render with subscript-like formatting."
                 )
+            elif text_has_hat_notation(text):
+                warnings.append(
+                    f"Text block `{node_id}` contains hat notation. Use `math_text` so the hat is rendered as a stable editable accent, "
+                    "not lost by font substitution or Visio text fitting."
+                )
+            elif text_has_generic_subscript_label(text):
+                fit = str((node.get("style", {}) if isinstance(node.get("style"), dict) else {}).get("text_fit", node.get("text_fit", ""))).lower()
+                if fit not in {"math_label", "single_line", "no_wrap", "nowrap"}:
+                    warnings.append(
+                        f"Text block `{node_id}` contains underscore subscript-like notation. "
+                        "Use `math_text` with `text_fit: \"math_label\"`, or explicitly set single-line text fitting for compact labels."
+                    )
+
+        if node_type == "math_label_box":
+            text = str(node.get("text", node.get("label", ""))).strip()
+            if not text:
+                errors.append(f"Math label box `{node_id}` needs `text` or `label`.")
+            shape = str(node.get("shape", "rect")).lower()
+            if shape not in {"rect", "rectangle", "round_rect", "rounded", "oval", "ellipse", "circle"}:
+                errors.append(f"Math label box `{node_id}` has unsupported shape `{shape}`.")
+            for key in (
+                "label_inset_in",
+                "label_font_size_pt",
+                "label_min_font_size_pt",
+                "subscript_scale",
+                "subscript_offset_in",
+                "fragment_pad_in",
+                "subscript_pad_in",
+                "subscript_box_pad_in",
+            ):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or value < 0):
+                    errors.append(f"Math label box `{node_id}` {key} must be a non-negative number.")
 
         if node_type == "math_text":
             text = str(node.get("text", "")).strip()
@@ -1308,15 +2373,64 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                 errors.append(f"Math text `{node_id}` needs `text` or `lines`.")
             if lines is not None and not isinstance(lines, list):
                 errors.append(f"Math text `{node_id}` lines must be an array.")
+            style_math_render_mode = (
+                node.get("style", {}).get("math_render_mode")
+                if isinstance(node.get("style"), dict)
+                else None
+            )
+            math_render_mode_value = node.get("math_render_mode") or node.get("render_mode") or style_math_render_mode
+            math_render_mode = str(math_render_mode_value).lower() if math_render_mode_value is not None else ""
+            if math_render_mode and math_render_mode not in {"fragments", "compact_unicode", "unicode", "single_box", "single_text", "plain_compact"}:
+                errors.append(f"Math text `{node_id}` has unsupported math_render_mode `{math_render_mode}`.")
             math_lines = lines if isinstance(lines, list) else text.splitlines()
             if any(text_has_compact_loss_notation(str(line)) for line in math_lines):
                 warnings.append(
                     f"Math text `{node_id}` uses compact loss notation such as `Ladv`/`Lrec`; normalize to `L_adv`/`L_rec`."
                 )
-            for key in ("line_gap_in", "subscript_scale", "subscript_offset_in", "segment_gap_in"):
+            if any(text_has_hat_notation(str(line)) for line in math_lines):
+                style_render_mode_value = (
+                    (node.get("style", {}) if isinstance(node.get("style"), dict) else {}).get("math_render_mode")
+                )
+                render_mode = math_render_mode or (str(style_render_mode_value).lower() if style_render_mode_value is not None else "")
+                if render_mode in {"compact_unicode", "unicode", "single_box", "single_text", "plain_compact"}:
+                    warnings.append(
+                        f"Math text `{node_id}` contains hat notation; renderer will force fragment mode so the hat accent is not dropped."
+                    )
+            if math_render_mode in {"compact_unicode", "unicode", "single_box", "single_text", "plain_compact"} and any(
+                re.search(r"[A-Za-z]_([A-Za-z]{2,}|[A-Z0-9_]{2,})", str(line))
+                for line in math_lines
+            ):
+                warnings.append(
+                    f"Math text `{node_id}` uses compact/unicode math mode for a word-like subscript. "
+                    "Prefer fragment rendering for labels such as `P_RGB`, `q_hrrp`, or `f_fused` so the subscript stays attached and legible."
+                )
+            for key in (
+                "line_gap_in",
+                "subscript_scale",
+                "subscript_offset_in",
+                "segment_gap_in",
+                "fragment_pad_in",
+                "subscript_pad_in",
+                "subscript_box_pad_in",
+                "padding_in",
+                "prime_scale",
+                "prime_tuck_in",
+                "prime_box_pad_in",
+                "prime_offset_y_in",
+            ):
                 value = node.get(key)
                 if value is not None and (not isinstance(value, (int, float)) or value < 0):
                     errors.append(f"Math text `{node_id}` {key} must be a non-negative number.")
+            for key in ("auto_compact_math",):
+                value = node.get(key)
+                if value is not None and not isinstance(value, bool):
+                    warnings.append(f"Math text `{node_id}` {key} should be boolean.")
+            if text and re.search(r"\b[A-Za-z][A-Za-z0-9]+_[A-Za-z0-9_]+", text):
+                warnings.append(
+                    f"Math text `{node_id}` starts an underscored label with a multi-letter base. "
+                    "For labels such as `f_tf`, `g_hrrp`, and `f_fused`, keep only the visible variable as the base "
+                    "and the rest as subscript; otherwise Visio exports can look like superscript fragments."
+                )
 
         if node_type == "tfr_panel":
             for key in ("rows", "cols"):
@@ -1351,10 +2465,40 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                 warnings.append(
                     f"Operator node `{node_id}` is not square; renderer will center a circle inside the box, but exact replicas should use w ~= h."
                 )
-            for key in ("symbol_font_size_pt", "symbol_inset_in", "symbol_offset_x_in", "symbol_offset_y_in"):
+            operator_shape = str(node.get("operator_shape", node.get("shape", ""))).lower()
+            if operator_shape and operator_shape not in {"circle", "oval", "ellipse", "none", "text", "label", "rect", "rectangle", "box"}:
+                errors.append(f"Operator node `{node_id}` has unsupported operator_shape/shape `{operator_shape}`.")
+            symbol_text = str(node.get("symbol", node.get("text", ""))).strip()
+            if len(symbol_text) > 1 and not (node.get("symbol_text_fit") or (isinstance(node.get("style"), dict) and node["style"].get("symbol_text_fit"))):
+                warnings.append(
+                    f"Operator node `{node_id}` has a multi-character symbol; set `symbol_text_fit: \"single_line\"` and tune symbol_box_* if the source shows a compact operator."
+                )
+            for key in (
+                "symbol_font_size_pt",
+                "symbol_inset_in",
+                "symbol_offset_x_in",
+                "symbol_offset_y_in",
+                "symbol_box_w_in",
+                "symbol_box_width_in",
+                "symbol_box_h_in",
+                "symbol_box_height_in",
+                "symbol_min_font_size_pt",
+                "symbol_text_margin_in",
+            ):
                 value = node.get(key)
                 if value is not None and not isinstance(value, (int, float)):
                     errors.append(f"Operator node `{node_id}` {key} must be numeric.")
+            operator_size_tier = node.get("operator_size_tier", node.get("style", {}).get("operator_size_tier") if isinstance(node.get("style"), dict) else None)
+            if operator_size_tier is not None and str(operator_size_tier).lower() not in OPERATOR_SIZE_TIERS:
+                errors.append(f"Operator node `{node_id}` has unsupported operator_size_tier `{operator_size_tier}`.")
+            if exact_mode and not any(
+                node_or_style_has_key(node, key)
+                for key in ("operator_size_tier", "symbol_font_size_pt", "symbol_box_w_in", "symbol_box_h_in")
+            ):
+                warnings.append(
+                    f"Operator node `{node_id}` has no explicit paper-operator sizing contract. "
+                    "Set `operator_size_tier` or explicit symbol box/font size so plus/minus/multiply glyphs do not drift."
+                )
 
         if node_type == "boundary_port":
             if dimensions.get("w", 0.0) > 0.22 or dimensions.get("h", 0.0) > 0.22:
@@ -1395,6 +2539,166 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     f"Classifier head `{node_id}` uses boundary output mode; draw output branches with `boundary_fanout`, not internal fanout_count."
                 )
 
+        if node_type == "layer_sequence":
+            orientation = str(node.get("orientation", "horizontal")).lower()
+            if orientation not in LAYER_SEQUENCE_ORIENTATIONS:
+                errors.append(
+                    f"Layer sequence `{node_id}` orientation must be horizontal/horizontal_bars or vertical/vertical_stack."
+                )
+            blocks = node.get("blocks", node.get("labels"))
+            if not isinstance(blocks, list) or not blocks:
+                errors.append(f"Layer sequence `{node_id}` blocks/labels must be a non-empty array.")
+            elif len(blocks) > 10:
+                warnings.append(
+                    f"Layer sequence `{node_id}` has {len(blocks)} blocks; verify the source really shows this many visible internal layers."
+                )
+            block_style_raw = node.get("block_style_mode")
+            if block_style_raw is None and isinstance(node.get("style"), dict):
+                block_style_raw = node.get("style", {}).get("block_style_mode")
+            block_style_mode = str(block_style_raw or "").lower()
+            if block_style_mode in {"none", "default", "auto"}:
+                block_style_mode = ""
+            if block_style_mode and block_style_mode not in {
+                "flat_colored",
+                "colored_flat",
+                "simple_colored",
+                "white_capsule",
+                "capsule_white",
+                "white",
+                "paper_capsule",
+                "paper_vertical_strip",
+                "vertical_strip",
+                "rounded_strip",
+                "paper_strip",
+                "tall_rounded",
+                "colored_paper_strip",
+                "colored_vertical_strip",
+                "paper_colored_strip",
+                "white_cuboid",
+                "paper_cuboid",
+                "paper_vertical_cuboid",
+                "white_3d",
+                "paper_3d_vertical_strip",
+                "source_3d_strip",
+                "cuboid",
+                "cuboid_layers",
+                "3d",
+            }:
+                errors.append(f"Layer sequence `{node_id}` has unsupported block_style_mode `{block_style_mode}`.")
+            for key in (
+                "padding_in",
+                "padding_x_in",
+                "padding_y_in",
+                "padding_left_in",
+                "padding_right_in",
+                "padding_top_in",
+                "padding_bottom_in",
+                "content_padding_left_in",
+                "content_padding_right_in",
+                "content_padding_top_in",
+                "content_padding_bottom_in",
+                "title_h_in",
+                "title_area_ratio",
+                "title_gap_in",
+                "block_gap_in",
+                "block_width_in",
+                "block_height_in",
+                "block_rounding_in",
+                "block_text_angle_deg",
+                "block_depth_x_in",
+                "block_depth_y_in",
+                "title_baseline_offset_in",
+            ):
+                value = node.get(key)
+                if value is not None and not isinstance(value, (int, float)):
+                    errors.append(f"Layer sequence `{node_id}` {key} must be numeric.")
+            title_align = node.get("title_align")
+            if title_align is not None and not isinstance(title_align, (int, float)):
+                errors.append(f"Layer sequence `{node_id}` title_align must be numeric/alignment-like.")
+            for key in ("content_align_x", "content_align_y"):
+                value = node.get(key)
+                if value is not None and not isinstance(value, str):
+                    errors.append(f"Layer sequence `{node_id}` {key} must be a string such as left/center/right or top/center/bottom.")
+            block_fills = node.get("block_fills", node.get("style", {}).get("block_fills") if isinstance(node.get("style"), dict) else None)
+            if block_fills is not None and (not isinstance(block_fills, list) or not block_fills):
+                errors.append(f"Layer sequence `{node_id}` block_fills must be a non-empty array when provided.")
+            if isinstance(block_fills, list) and block_fills and block_style_mode in {
+                "paper_vertical_strip",
+                "vertical_strip",
+                "rounded_strip",
+                "paper_strip",
+                "tall_rounded",
+                "white_cuboid",
+                "paper_cuboid",
+                "paper_vertical_cuboid",
+                "white_3d",
+                "paper_3d_vertical_strip",
+                "source_3d_strip",
+            }:
+                block_fill_policy = str(node.get("block_fill_policy", node.get("style", {}).get("block_fill_policy") if isinstance(node.get("style"), dict) else "")).lower()
+                if block_fill_policy not in {"white", "ignore", "block_fill", "fixed"} and not node.get("ignore_block_fills"):
+                    warnings.append(
+                        f"Layer sequence `{node_id}` provides block_fills but uses white layer mode `{block_style_mode}`; set `block_fill_policy: \"white\"` if source bars are white, or use `colored_paper_strip` if source bars are colored."
+                    )
+            orientation = str(node.get("orientation", "horizontal")).lower()
+            style_dict = node.get("style", {}) if isinstance(node.get("style"), dict) else {}
+            block_angle = node.get("block_text_angle_deg", style_dict.get("block_text_angle_deg"))
+            if block_angle is not None and isinstance(block_angle, (int, float)):
+                if orientation in LAYER_SEQUENCE_VERTICAL_ORIENTATIONS and abs((float(block_angle) % 180) - 90) <= 1e-3:
+                    warnings.append(
+                        f"Layer sequence `{node_id}` is a vertical/row stack but uses 90-degree block text. "
+                        "If the source shows stacked horizontal rows, set `block_text_angle_deg: 0` so labels stay readable."
+                    )
+            if block_style_mode in {"colored_paper_strip", "colored_vertical_strip", "paper_colored_strip", "flat_colored", "colored_flat", "simple_colored"}:
+                if not isinstance(block_fills, list) or not block_fills:
+                    warnings.append(
+                        f"Layer sequence `{node_id}` uses colored block mode but has no block_fills; visual review may see white/blank strips instead of source-colored layer bars."
+                    )
+                if node.get("ignore_block_fills") and str(node.get("block_fill_policy", "")).lower() not in {"preserve", "source", "source_colors", "colored", "block_fills", "fills"}:
+                    warnings.append(
+                        f"Layer sequence `{node_id}` uses colored block mode with ignore_block_fills; renderer preserves colors, but remove ignore_block_fills or set `block_fill_policy: \"preserve\"` to document source-colored bars."
+                    )
+            title = str(node.get("title", node.get("text", ""))).strip()
+            if title and has_valid_box(node):
+                title_font = float(node.get("title_font_size_pt", style_dict.get("title_font_size_pt", style_dict.get("font_size_pt", 15))) or 15)
+                title_h_value = node.get("title_h_in", style_dict.get("title_h_in"))
+                title_area_ratio = node.get("title_area_ratio", style_dict.get("title_area_ratio"))
+                if isinstance(title_h_value, (int, float)):
+                    title_h = float(title_h_value)
+                elif isinstance(title_area_ratio, (int, float)):
+                    title_h = float(node["h"]) * max(0.0, min(0.5, float(title_area_ratio)))
+                else:
+                    title_h = min(float(node["h"]) * 0.26, 0.42)
+                _, estimated_title_h = estimate_text_box(title.replace("\n", " "), title_font)
+                if title_h < estimated_title_h * 0.90:
+                    warnings.append(
+                        f"Layer sequence `{node_id}` title area is likely too short for its title font. Increase title_h_in/title_area_ratio or reduce title font before polishing block geometry."
+                    )
+            if exact_mode and isinstance(blocks, list) and len(blocks) >= 4:
+                if not any(
+                    node_or_style_has_key(node, key)
+                    for key in ("block_gap_in", "padding_in", "padding_left_in", "padding_right_in", "content_padding_left_in", "content_padding_right_in")
+                ):
+                    warnings.append(
+                        f"Layer sequence `{node_id}` has repeated strips but no explicit density spacing contract. "
+                        "Write block gap and padding explicitly instead of inheriting generic defaults."
+                    )
+                if title and not any(node_or_style_has_key(node, key) for key in ("title_h_in", "title_area_ratio")):
+                    warnings.append(
+                        f"Layer sequence `{node_id}` has a title but no explicit title-band height contract. "
+                        "Lock the title area before adjusting inner strip geometry."
+                    )
+                if not any(node_or_style_has_key(node, key) for key in ("density_mode", "dense")):
+                    warnings.append(
+                        f"Layer sequence `{node_id}` has repeated strips but no explicit density_mode/dense flag. "
+                        "Document whether the source region is compact or loose."
+                    )
+                if not any(node_or_style_has_key(node, key) for key in ("block_rounding_in", "block_shadow")):
+                    warnings.append(
+                        f"Layer sequence `{node_id}` has no explicit strip rounding/shadow contract. "
+                        "Repeated strip modules should not rely only on profile defaults in strict replica mode."
+                    )
+
         if node_type == "boundary_fanout":
             side = str(node.get("side", "right")).lower()
             if side not in {"left", "right", "top", "bottom"}:
@@ -1417,6 +2721,77 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             layers = node.get("layers", node.get("style", {}).get("layers", 4))
             if not isinstance(layers, int) or layers <= 0:
                 errors.append(f"Stacked node `{node_id}` must have positive integer `layers`.")
+
+        if node_type == "tensor_stack":
+            layers = node.get("layers", node.get("style", {}).get("layers", 5) if isinstance(node.get("style"), dict) else 5)
+            if not isinstance(layers, int) or layers <= 0:
+                errors.append(f"Tensor stack `{node_id}` must have positive integer `layers`.")
+            stack_render_mode = str(node.get("stack_render_mode", node.get("render_mode", node.get("style", {}).get("stack_render_mode") if isinstance(node.get("style"), dict) else ""))).lower()
+            if stack_render_mode and stack_render_mode not in {
+                "cuboids",
+                "thin_sheets",
+                "sheets",
+                "front_sheets",
+                "flat_sheets",
+                "slanted_sheets",
+                "thin_slabs",
+                "paper_sheets",
+                "parallelogram_sheets",
+                "oblique_slabs",
+                "slabs",
+                "perspective_slabs",
+                "paper_3d",
+                "feature_cuboids",
+                "thick_cuboids",
+                "feature_stack",
+                "paper_feature_stack",
+                "thick_feature_map",
+                "thin_feature_slabs",
+                "thin_feature_stack",
+                "layered_slabs",
+                "source_thin_slabs",
+                "paper_thin_feature",
+            }:
+                errors.append(f"Tensor stack `{node_id}` has unsupported stack_render_mode `{stack_render_mode}`.")
+            for key in ("depth_x_in", "depth_y_in", "layer_dx_in", "layer_dy_in", "layer_fill_delta", "sheet_line_weight_pt", "skew_x_in", "sheet_scale", "depth_scale", "min_layer_shift_in"):
+                value = node.get(key, node.get("style", {}).get(key) if isinstance(node.get("style"), dict) else None)
+                if value is not None and not isinstance(value, (int, float)):
+                    errors.append(f"Tensor stack `{node_id}` {key} must be numeric.")
+            for key in ("depth_is_relative", "depth_x_in_relative", "depth_y_in_relative"):
+                value = node.get(key, node.get("style", {}).get(key) if isinstance(node.get("style"), dict) else None)
+                if value is not None and not isinstance(value, bool):
+                    warnings.append(f"Tensor stack `{node_id}` {key} should be boolean.")
+            perspective_raw = node.get("perspective_mode", node.get("style", {}).get("perspective_mode") if isinstance(node.get("style"), dict) else "")
+            perspective_mode = "" if perspective_raw in {None, ""} else str(perspective_raw).lower()
+            if perspective_mode and perspective_mode not in TENSOR_PERSPECTIVE_MODES:
+                errors.append(f"Tensor stack `{node_id}` has unsupported perspective_mode `{perspective_mode}`.")
+            if has_valid_box(node):
+                width = float(node["w"])
+                height = float(node["h"])
+                depth_x = node.get("depth_x_in", node.get("style", {}).get("depth_x_in") if isinstance(node.get("style"), dict) else None)
+                depth_y = node.get("depth_y_in", node.get("style", {}).get("depth_y_in") if isinstance(node.get("style"), dict) else None)
+                if isinstance(depth_x, (int, float)) and width > 0 and abs(float(depth_x)) / width > 0.42:
+                    warnings.append(
+                        f"Tensor stack `{node_id}` depth_x_in is large relative to width ({abs(float(depth_x)) / width:.2f}); check perspective or source bbox before tuning colors."
+                    )
+                if isinstance(depth_y, (int, float)) and height > 0 and abs(float(depth_y)) / height > 0.42:
+                    warnings.append(
+                        f"Tensor stack `{node_id}` depth_y_in is large relative to height ({abs(float(depth_y)) / height:.2f}); check perspective or source bbox before tuning colors."
+                    )
+                if perspective_mode in {"flat", "front"} and stack_render_mode in {"feature_cuboids", "thick_cuboids", "feature_stack", "paper_feature_stack", "thick_feature_map"}:
+                    warnings.append(
+                        f"Tensor stack `{node_id}` asks for flat/front perspective but uses thick cuboid render mode. If the source looks nearly front-on, switch to thin slabs/sheets."
+                    )
+            if exact_mode and not any(node_or_style_has_key(node, key) for key in ("stack_render_mode", "render_mode")):
+                warnings.append(
+                    f"Tensor stack `{node_id}` has no explicit shape-family contract. "
+                    "Choose thin slabs, thick cuboids, slanted sheets, or flat sheets explicitly before tweaking depth."
+                )
+            if exact_mode and not node_or_style_has_key(node, "perspective_mode") and not node.get("source_bbox_px", node.get("source_bbox")):
+                warnings.append(
+                    f"Tensor stack `{node_id}` has no explicit perspective_mode/source bbox contract. "
+                    "3D thickness should not drift as a hidden default in strict replica mode."
+                )
 
         if node_type == "grid_matrix":
             for key in ("rows", "cols"):
@@ -1452,6 +2827,190 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     if isinstance(cols, int) and not 0 <= zero_col < cols:
                         errors.append(f"Grid matrix `{node_id}` cell {index} col is out of range.")
 
+        if node_type == "token_grid":
+            for key in ("rows", "cols"):
+                value = node.get(key)
+                if not isinstance(value, int) or value <= 0:
+                    errors.append(f"Token grid `{node_id}` must have positive integer `{key}`.")
+            rows = node.get("rows")
+            cols = node.get("cols")
+            index_base = int(node.get("index_base", 0))
+            cells = node.get("cells", node.get("tokens", []))
+            if cells is not None and not isinstance(cells, list):
+                errors.append(f"Token grid `{node_id}` cells/tokens must be an array.")
+            elif isinstance(cells, list):
+                for index, cell in enumerate(cells):
+                    if isinstance(cell, dict) and ("row" in cell or "col" in cell):
+                        row = cell.get("row")
+                        col = cell.get("col")
+                        if not isinstance(row, int) or not isinstance(col, int):
+                            errors.append(f"Token grid `{node_id}` cell {index} row/col must be integers.")
+                            continue
+                        zero_row = row - index_base
+                        zero_col = col - index_base
+                        if isinstance(rows, int) and not 0 <= zero_row < rows:
+                            errors.append(f"Token grid `{node_id}` cell {index} row is out of range.")
+                        if isinstance(cols, int) and not 0 <= zero_col < cols:
+                            errors.append(f"Token grid `{node_id}` cell {index} col is out of range.")
+            for key in ("cell_gap_in", "cell_rounding_in", "cell_font_size_pt"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or value < 0):
+                    errors.append(f"Token grid `{node_id}` {key} must be a non-negative number.")
+            for key in ("square_cells",):
+                value = node.get(key)
+                if value is not None and not isinstance(value, bool):
+                    warnings.append(f"Token grid `{node_id}` {key} should be boolean.")
+
+        if node_type == "feature_vector_stack":
+            count = node.get("count", node.get("cells_count", node.get("length")))
+            if count is not None and (not isinstance(count, int) or count <= 0):
+                errors.append(f"Feature vector stack `{node_id}` count/cells_count/length must be a positive integer.")
+            entries = node.get("entries", node.get("cells", node.get("tokens")))
+            if entries is not None and not isinstance(entries, list):
+                errors.append(f"Feature vector stack `{node_id}` entries/cells/tokens must be an array.")
+            orientation = str(node.get("orientation", (node.get("style", {}) if isinstance(node.get("style"), dict) else {}).get("orientation", "vertical"))).lower()
+            if orientation not in {"vertical", "v", "horizontal", "h", "row"}:
+                errors.append(f"Feature vector stack `{node_id}` orientation must be vertical or horizontal.")
+            for key in ("cell_gap_in", "cell_rounding_in", "cell_font_size_pt", "bracket_w_in", "bracket_line_weight_pt"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                    errors.append(f"Feature vector stack `{node_id}` {key} must be a non-negative number.")
+            for key in ("label_gap_in", "label_w_in", "label_h_in", "label_font_size_pt"):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or float(value) < 0):
+                    errors.append(f"Feature vector stack `{node_id}` {key} must be a non-negative number.")
+
+        if node_type in RUN_TEXT_NODE_TYPES:
+            validate_text_runs_payload(
+                node,
+                node_id,
+                "Caption block" if node_type == "caption_block" else "Text node",
+                errors,
+                warnings,
+                exact_mode=exact_mode,
+            )
+
+        if node_type == "caption_block":
+            runs = node.get("runs")
+            text = str(node.get("text", "")).strip()
+            if not text and not runs:
+                warnings.append(f"Caption block `{node_id}` has no text/runs.")
+            if node.get("strict_mode") and runs and len(runs) < 2:
+                warnings.append(
+                    f"Caption block `{node_id}` uses strict_mode but has fewer than two runs; paper captions usually need a bold prefix run plus a body run."
+                )
+            baseline_offset = node.get("baseline_offset_in")
+            if baseline_offset is not None and not isinstance(baseline_offset, (int, float)):
+                errors.append(f"Caption block `{node_id}` baseline_offset_in must be numeric.")
+            if node.get("strict_mode") and not node.get("source_bbox_px", node.get("source_bbox")):
+                warnings.append(
+                    f"Caption block `{node_id}` uses strict_mode without source_bbox_px/source_bbox; caption centering and baseline drift are hard to review."
+                )
+
+        if node_type == "annotation_block" and isinstance(node.get("runs"), list):
+            text_role = str(node.get("text_role", node.get("semantic_role", ""))).lower()
+            if exact_mode and text_role not in {"annotation", "note", "callout", "caption", "formula"}:
+                warnings.append(
+                    f"Annotation block `{node_id}` uses runs but has no explicit text_role/semantic_role. Mark it as annotation/note/callout/formula so visual review can apply the right typography standard."
+                )
+
+        if node_type in {"annotation_block", "formula_text_block", "branch_trunk", "merge_trunk", "paper_bus", "collector_bar", "junction_bus", "vector_label_group"}:
+            if exact_mode and not node.get("source_bbox_px", node.get("source_bbox")):
+                warnings.append(
+                    f"Exact-scene node `{node_id}` (`{node_type}`) should include source_bbox_px/source_bbox so local visual drift can be reviewed."
+                )
+
+        for key in ("semantic_role", "text_role", "source_bbox_px", "source_font_family", "font_role", "label_anchor", "layout_motif", "topology_motif"):
+            if key in node:
+                value = node.get(key)
+                if key in {"semantic_role", "text_role", "source_font_family", "font_role", "label_anchor", "layout_motif", "topology_motif"} and value is not None and not isinstance(value, str):
+                    errors.append(f"Node `{node_id}` {key} must be a string.")
+                if key == "source_bbox_px" and value is not None:
+                    if not isinstance(value, list) or len(value) != 4 or not all(isinstance(item, (int, float)) for item in value):
+                        errors.append(f"Node `{node_id}` source_bbox_px must be [left, top, right, bottom].")
+
+        if node_type == "probability_bar_list":
+            items = node.get("items", node.get("rows", []))
+            if items is not None and not isinstance(items, list):
+                errors.append(f"Probability bar list `{node_id}` items/rows must be an array.")
+            elif isinstance(items, list):
+                for index, item in enumerate(items):
+                    if isinstance(item, dict):
+                        value = item.get("value", item.get("probability", item.get("score")))
+                        if value is not None and not isinstance(value, (int, float, str)):
+                            errors.append(f"Probability bar list `{node_id}` item {index} value must be numeric or text.")
+                    elif not isinstance(item, (list, str, int, float)):
+                        errors.append(f"Probability bar list `{node_id}` item {index} is invalid.")
+            for key in (
+                "padding_in",
+                "row_gap_in",
+                "row_height_in",
+                "bar_gap_in",
+                "bar_height_in",
+                "label_w_in",
+                "pre_value_w_in",
+                "value_w_in",
+                "axis_w_in",
+                "axis_line_weight_pt",
+                "bar_value_text_gap_in",
+                "panel_inner_padding_left_in",
+                "panel_inner_padding_right_in",
+                "panel_inner_padding_top_in",
+                "panel_inner_padding_bottom_in",
+                "axis_offset_x_in",
+                "bar_start_offset_x_in",
+                "bar_end_padding_in",
+                "bar_w_in",
+                "label_offset_x_in",
+                "label_offset_y_in",
+                "pre_value_offset_x_in",
+                "pre_value_offset_y_in",
+                "value_offset_x_in",
+                "value_offset_y_in",
+                "bar_value_offset_x_in",
+                "bar_value_offset_y_in",
+                "label_baseline_offset_in",
+                "pre_value_baseline_offset_in",
+                "value_baseline_offset_in",
+                "bar_value_baseline_offset_in",
+            ):
+                value = node.get(key)
+                if value is not None and (not isinstance(value, (int, float)) or value < 0):
+                    errors.append(f"Probability bar list `{node_id}` {key} must be a non-negative number.")
+            for key in ("label_align", "pre_value_align", "value_align", "bar_value_align", "row_vertical_align"):
+                value = node.get(key)
+                if value is not None and not isinstance(value, (int, float)):
+                    errors.append(f"Probability bar list `{node_id}` {key} must be numeric/alignment-like.")
+            value = node.get("bar_max_fraction")
+            if value is not None and (not isinstance(value, (int, float)) or not 0 < float(value) <= 1):
+                errors.append(f"Probability bar list `{node_id}` bar_max_fraction must be a number in (0, 1].")
+            if exact_mode:
+                missing_exact_keys = [
+                    key
+                    for key in ("label_w_in", "row_gap_in", "bar_max_fraction")
+                    if not node_or_style_has_key(node, key)
+                ]
+                if missing_exact_keys:
+                    warnings.append(
+                        f"Exact probability bar list `{node_id}` should explicitly record {', '.join(missing_exact_keys)}; "
+                        "panel micro-layout should not rely only on profile defaults."
+                    )
+                if not (
+                    node_or_style_has_key(node, "axis_w_in")
+                    or node_or_style_has_key(node, "axis_offset_x_in")
+                ):
+                    warnings.append(
+                        f"Exact probability bar list `{node_id}` should explicitly record the axis position with `axis_w_in` or `axis_offset_x_in`."
+                    )
+                if not node_or_style_has_key(node, "bar_value_anchor"):
+                    warnings.append(
+                        f"Exact probability bar list `{node_id}` should explicitly record `bar_value_anchor`; row text placement is a major visual fidelity control."
+                    )
+                if not any(node_or_style_has_key(node, key) for key in ("shadow", "panel_shadow")):
+                    warnings.append(
+                        f"Exact probability bar list `{node_id}` should explicitly set panel shadow, even if it is `null`, so paper-style softness is not left implicit."
+                    )
+
         if node_type == "feature_map_grid":
             rows = node.get("rows")
             cols = node.get("cols", node.get("columns"))
@@ -1475,6 +3034,17 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                 value = node.get(key)
                 if value is not None and not isinstance(value, bool):
                     errors.append(f"Feature map grid `{node_id}` {key} must be a boolean.")
+
+        if node_type == "feature_map_banded":
+            separator_count = node.get("separator_count", node.get("vertical_separator_count"))
+            if separator_count is not None and (not isinstance(separator_count, int) or separator_count < 0):
+                errors.append(f"Feature map banded `{node_id}` separator_count must be a non-negative integer.")
+            separator_positions = node.get("separator_positions", node.get("vertical_separator_positions"))
+            if separator_positions is not None:
+                if not isinstance(separator_positions, list):
+                    errors.append(f"Feature map banded `{node_id}` separator_positions must be an array.")
+                elif not all(isinstance(item, (int, float)) for item in separator_positions):
+                    errors.append(f"Feature map banded `{node_id}` separator_positions must contain only numbers.")
 
         if node_type == "polygon_node":
             points = node.get("points")
@@ -1529,6 +3099,8 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             "image_tile",
             "grid_matrix",
             "bracket",
+            "brace_merge",
+            "concat_operator",
             "junction_point",
             "boundary_port",
             "audit_region",
@@ -1536,16 +3108,25 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             "loss_region",
             "page_background",
             "merge_bus",
+            "multi_port_junction",
             "boundary_fanout",
             "feature_map_banded",
             "feature_map_grid",
             "wave_signal",
             "classifier_head",
+            "layer_sequence",
+            "token_grid",
+            "feature_vector_stack",
+            "caption_block",
+            "probability_bar_list",
             "polygon_node",
             "trapezoid_node",
+            "dual_wing_encoder",
             "cuboid_node",
+            "tensor_stack",
             "modality_spine",
             "math_vector",
+            "math_label_box",
             "math_text",
             "tfr_panel",
         }
@@ -1566,6 +3147,8 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             warnings.append(f"Could not resolve style for node `{node.get('id')}` during font validation: {exc}")
             continue
         warnings.extend(font_validation_warnings(node, style, exact_mode))
+        warnings.extend(text_fit_warnings(node, style, exact_mode))
+        warnings.extend(strict_text_shrink_warnings(node, style, exact_mode))
     validate_alignment(nodes_by_id, node_types_by_id, containers_by_node, warnings)
     validate_boundary_ports(nodes_by_id, node_types_by_id, warnings, errors)
     validate_large_figure_discipline(
@@ -1629,7 +3212,8 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     "containers/audit regions should frame regions, not act as flow endpoints. Use a `junction_point` or explicit border anchor."
                 )
             side = endpoint_side(endpoint_value)
-            if side and side not in {"left", "right", "top", "bottom", "center"}:
+            endpoint_node_type = node_types_by_id.get(node_id)
+            if side and side not in allowed_endpoint_sides_for_node(endpoint_node_type):
                 errors.append(
                     f"Edge `{edge_id}` {endpoint_name} has unsupported side `{side}`."
                 )
@@ -1720,6 +3304,9 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     f"Edge `{edge_id}` contains diagonal segment(s); use `hv`/`vh`, aligned explicit points, "
                     "or set `allow_diagonal: true` only for intentional callout lines."
                 )
+            if exact_mode:
+                warnings.extend(exact_text_route_overlap_warnings(route_points, str(edge_id), edge, nodes_by_id, node_types_by_id))
+            orthogonalized = bool(edge.get("orthogonalize_points"))
             if route_name in {
                 "orthogonal",
                 "elbow",
@@ -1737,7 +3324,12 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             } and diagonal_segments and edge_type not in CURVED_EDGE_TYPES:
                 warnings.append(
                     f"Edge `{edge_id}` is marked `{route_name}` but its computed path is not axis-aligned. "
-                    "Align the first/last explicit point with the endpoint or use `hv`/`vh`."
+                    "Align the first/last explicit point with the endpoint or set `orthogonalize_points: true` for right-angle explicit routes."
+                )
+            if points and diagonal_segments and not orthogonalized and edge_type not in CURVED_EDGE_TYPES and route_name in {"auto", "orthogonal", "elbow", "right_angle"}:
+                warnings.append(
+                    f"Edge `{edge_id}` has explicit points that still create diagonal segment(s). "
+                    "Set `orthogonalize_points: true`, provide exact axis-aligned points, or mark intentional diagonals with `allow_diagonal: true`."
                 )
 
             axes = route_axes(route_points)
@@ -1959,6 +3551,26 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     "Split cross-module routes through `junction_point` nodes with `role: boundary_anchor`, "
                     "or mark `allow_cross_container: true` for deliberate callouts."
                 )
+            if exact_mode and source_container != target_container:
+                source_type = node_types_by_id.get(source_node_id) if source_node_id else None
+                target_type = node_types_by_id.get(target_node_id) if target_node_id else None
+                if isinstance(source, str) and source_type != "boundary_port" and not endpoint_has_explicit_side_anchor(source) and not edge.get("allow_direct_cross_container"):
+                    warnings.append(
+                        f"Edge `{edge_id}` leaves `{source_node_id}` across a module boundary without an explicit side anchor. "
+                        "Do not rely on center-to-center flow; use a boundary port, side anchor, bus, or explicit junction."
+                    )
+                if isinstance(target, str) and target_type != "boundary_port" and not endpoint_has_explicit_side_anchor(target) and not edge.get("allow_direct_cross_container"):
+                    warnings.append(
+                        f"Edge `{edge_id}` enters `{target_node_id}` across a module boundary without an explicit side anchor. "
+                        "Bind long cross-module edges to a side/port instead of default center landing."
+                    )
+                if line_length(route_points) > 0.75 and edge_type in {"arrow_connector", "dynamic_connector", "line_segment"}:
+                    route_name_lower = str(route_name).lower()
+                    if route_name_lower in {"", "auto", "straight"} and not points and not edge.get("force_axis"):
+                        warnings.append(
+                            f"Edge `{edge_id}` is a long cross-module route but leaves routing grammar implicit. "
+                            "Set an axis-aligned route, force_axis, or explicit orthogonal points before visual polishing."
+                        )
             if source_container != target_container and edge_type not in {"line_segment", "boundary_arrow"}:
                 source_type = node_types_by_id.get(source_node_id) if source_node_id else None
                 target_type = node_types_by_id.get(target_node_id) if target_node_id else None

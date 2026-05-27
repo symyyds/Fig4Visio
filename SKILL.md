@@ -47,7 +47,11 @@ This skill is Windows-first and expects:
 - local Microsoft Visio desktop installed
 - Python with `pywin32`
 
-Use the active environment's Python interpreter. The examples below use `python`; replace it with a project-specific interpreter path when needed.
+Use the active thread default Python interpreter. If the user or project provides a specific Python path, use that; otherwise use:
+
+```powershell
+python
+```
 
 ## Workflow
 
@@ -61,12 +65,55 @@ First classify the source request:
 
 If the diagram is mostly boxes, arrows, labels, and containers, stay in `visiomaster`.
 
+For image-based exact replicas, always secure a local source image file before claiming strict review readiness:
+- If the user provides a filesystem path, use that path as `metadata.source_image` and all review `--original` inputs.
+- If the user uploads or attaches an image without a local path, save/stage that image into the reconstruction workspace as `source/original.<ext>` before rendering the final deliverable. Do not treat a chat attachment alone as an acceptable strict-review source.
+- If the current client does not expose an attached image as readable bytes and the image cannot be staged locally, clearly mark the work as a draft/manual preview and ask for a source file path before strict review or final exact delivery.
+- Every exact replica must keep the staged/local source path stable across review rounds. Do not use screenshots of the replica, pair images, OCR output, or memory of the attachment as a substitute for the original source image.
+
+When you have a source file path, stage it with the helper script so review manifests can use one stable canonical image:
+
+```powershell
+python ${SKILL_DIR}\scripts\stage_source_image.py `
+  --input <source.png> `
+  --workspace <reconstruction_workspace> `
+  --id <figure_id>
+```
+
+This writes `source/original.<ext>` and `source/source_manifest.json` with SHA-256 hashes. Use the staged image path as `metadata.source_image` and as `make_review_assets.py --original`.
+
 For wide or dense figures, do not start by authoring the whole page in one pass. If the source has many modules, many arrows, tiny labels, or a very wide canvas, first create a region plan:
 - visible regions become `group_container`
 - invisible logical work areas become `audit_region`
 - every meaningful node gets `container_id`
 - each region should usually stay under 12-18 visible nodes before whole-page assembly
 - shared typography and arrow styles must be fixed before region scenes are merged
+
+For exact replicas, do not write `scene.json` until you have a source-faithful visual inventory for that specific image. This inventory is produced by visual LLM inspection of the source image, not by OCR, filename clues, warning logs, prior scenes, or a batch scene generator. It must preserve visible source language and notation exactly; do not translate Chinese labels to English, normalize formulas, invent unreadable text, or replace source modules with generic neural-network blocks unless the source visibly shows them.
+
+Record the inventory in `metadata.source_visual_inventory` before the first render. At minimum it should include:
+- `analysis_basis`: a short note such as `visual_llm_source_image`.
+- `language_profile` and `do_not_translate`.
+- `unknown_text_policy`: use `mark_unreadable_do_not_invent` for unclear tiny text.
+- per-region `source_bbox_px`, required visible labels/formulas, component motifs, edge motifs, port/boundary/dashed-frame notes, uncertainty notes, and text layout facts.
+
+For paper-style exact replicas, `source_visual_inventory` should record precise layout facts, not only module names:
+- text alignment: left / center / right and baseline relation
+- intended line breaks and no-wrap expectations
+- whether a label is plain text, math-like, caption, annotation, or mixed CJK+math
+- whether subscripts/superscripts are visible and must be preserved
+- serif / sans / CJK / math font intent and visible source font if known
+- whether visible shadow / glow / emphasis exists on the source text or bars
+- caption prefix/body split such as bold `Fig. 6.` plus regular body
+- crop obligations for that region, such as `caption`, `small_text`, or `arrow_dense`
+- box/line/shadow/density facts for that region: padding, corner radius, dash rhythm, line weight, soft-shadow character, and whether the crop is visually tight or loose
+
+For strict replica work, also mark:
+- `metadata.replica_review_mode: "strict_replica"`
+- `metadata.replica_stage: "layout_topology"` before the first render
+- `metadata.replica_stage: "detail_polish"` only after layout/topology is already visually correct
+
+Fresh capability evaluation means a fresh scene from the source inventory. Do not validate a skill change by patching an old scene and checking whether that old scene looks better. Old scenes and old reviews may explain failure modes, but after changing skill workflow, schema, renderer, or components, rebuild each test scene from the source image inventory. Batch exporting finished scenes is fine; batch-generating several scenes from one Python script is not valid proof that the skill works for normal users.
 
 ### 2. Build or refine `scene.json`
 
@@ -85,6 +132,8 @@ Starter generation:
 python ${SKILL_DIR}\scripts\image_to_scene.py --image <source.png> --output <scene.json>
 ```
 
+This script does not infer the real diagram structure from pixels. It only writes a blank or template starter scene. The actual first-pass `scene.json` for exact work must still be authored by the LLM from the source image.
+
 For exact large-figure reconstruction, start in source pixels and record the region strategy:
 
 ```powershell
@@ -97,13 +146,17 @@ If the layout is close to a standard process flow, you can seed from the built-i
 python ${SKILL_DIR}\scripts\image_to_scene.py --image <source.png> --template basic-flow --output <scene.json>
 ```
 
-For GAN/TFR training-cycle figures, AI-generated paper diagrams, or images with Real/Generated TFR panels, do not start from a blank scene. Seed the first pass from the canonical module template:
+Treat this as draft/bootstrap authoring only. It is not valid strict-replica proof.
+
+For GAN/TFR training-cycle figures, AI-generated paper diagrams, or images with Real/Generated TFR panels, you may seed a draft/bootstrap pass from the canonical module template:
 
 ```powershell
 python ${SKILL_DIR}\scripts\image_to_scene.py --image <source.png> --template gan-tfr --output <scene.json>
 ```
 
-Before the first Visio render of a hand-authored or legacy GAN/TFR scene, run the deterministic recipe pass:
+Do not use template-seeded scenes as final evidence for strict capability evaluation. For strict replica work, rebuild the scene from a blank source-driven authoring pass before judging the skill.
+
+Before the first Visio render of a draft/bootstrap or legacy GAN/TFR scene, you may run the deterministic recipe pass explicitly:
 
 ```powershell
 python ${SKILL_DIR}\scripts\scene_autofix.py <scene.json> --recipe gan-tfr --output <fixed.scene.json>
@@ -111,7 +164,7 @@ python ${SKILL_DIR}\scripts\scene_autofix.py <scene.json> --recipe gan-tfr --out
 
 This recipe upgrades fragile local grammar before visual tuning: split Real/Generated boxes become `tfr_panel`, empty dashed loss frames become `loss_region`, raw `L_adv`/`L_rec` text becomes `math_text`, detached/broken outer loops become smooth `loop_arrow`, reversed GAN arrows are corrected, and crowded backprop arrows are bundled.
 
-`scene_to_visio.py` also runs this GAN/TFR autofix once by default before the rebuild gate. Treat the written `<basename>.autofixed.scene.json` as the scene to inspect when the renderer reports pre-render changes. Use `--no-autofix` only when you intentionally want to debug the raw scene.
+`scene_to_visio.py` no longer runs this autofix implicitly for strict/exact scenes. Use `--autofix-gan-tfr` only when you intentionally want an explicit bootstrap/render helper path, and treat the written `<basename>.autofixed.scene.json` as a non-final rewritten scene until you re-author a fresh strict-replica scene from source inventory.
 
 ### 3. Validate scene data
 
@@ -156,10 +209,11 @@ Use the audit report to review every `group_container` as a separate region: chi
 For exact replicas, run the rebuild gate after each rendered iteration:
 
 ```powershell
+python ${SKILL_DIR}\scripts\scene_validate.py <scene.json> --strict
 python ${SKILL_DIR}\scripts\scene_audit.py <scene.json> --fail-on-rebuild
 ```
 
-If the audit prints `[REBUILD]` items, stop coordinate nudging. Rebuild that local subsystem with the correct semantic component (`loop_arrow`, `dashed_region`, `dashed_feedback_path`, `boundary_port`, etc.) before doing any more visual polishing.
+In strict mode, missing `source_visual_inventory`, missing `region_plan`, template-seeded starts, and recipe-rewritten exact scenes are treated as gate failures, not informal warnings. If validate/audit prints a blocking contract failure or `[REBUILD]` item, stop coordinate nudging. Rebuild that local subsystem with the correct semantic component (`loop_arrow`, `dashed_region`, `dashed_feedback_path`, `boundary_port`, etc.) before doing any more visual polishing.
 
 For exact replica work, validation passing is necessary but not sufficient. Render a PNG and compare it with the source for:
 - page aspect ratio
@@ -168,6 +222,15 @@ For exact replica work, validation passing is necessary but not sufficient. Rend
 - distinctive shapes
 - connector grammar
 - feature-map coloring
+- source-language preservation, formulas, tiny labels, ports, and arrow endpoints
+
+Exact mode should run as a two-stage production loop, not one rushed render:
+1. first render/review stage: lock layout, region bboxes, container bounds, and topology grammar
+2. second render/review stage: fix text layout, caption behavior, shadows, local spacing, and visual polish
+
+If a higher-level component stays visually wrong after two strict reviews, rebuild that local subsystem with smaller components or primitives. Do not keep nudging the whole page around one stubborn panel or text cluster.
+
+Do not ship after a first-pass exact render unless the second review round is already represented and visually clean.
 
 ### 4. Render into Visio
 
@@ -186,7 +249,155 @@ Use `--style-profile clean_white` when the user wants a polished white product/p
 
 Read `references/visio-export-flow.md` when debugging Visio automation or export behavior.
 
-After rendering complex replicas, open the exported PNG and compare it module-by-module against the source. Do not rely on whole-image visual similarity; small topology errors often hide inside large figures.
+After rendering complex replicas, compare the exported PNG module-by-module against the source. Do not rely on whole-image visual similarity; small topology errors often hide inside large figures.
+
+For exact replicas, the first render is allowed to be a fast editable reconstruction pass, but the first render must be followed by at least one local-source review round before final delivery:
+- Use the local/staged original image file and the exported replica PNG with `make_review_assets.py --write-review-bundle`.
+- The reviewer input is the original source image plus the current replica image. Do not send a generated global pair when those two full images are already available; a global pair is only a human navigation/audit artifact and usually shrinks fine details.
+- Generate local crop assets only for the regions under active doubt, such as `attention_core`, `arrow_dense`, `right_output`, `small_text`, or `caption`. Do not generate or review every crop by habit. If you generate a crop but neither a human nor the reviewer inspects it, it is only a stored debug artifact, not review evidence.
+- Overlay assets are off by default. Generate overlays only when checking global alignment drift, frame offsets, or region bbox registration. Do not use overlays for arrow topology, text wrapping, operator endpoints, or formula fidelity; they tend to obscure those defects.
+- During review, convert source-vs-replica visual comparison into two explicit checklists inside or alongside `review_findings.json`: a topology checklist and a visual-layout checklist.
+- The topology checklist records source facts such as branches, merges, boundary crossings, operator order, arrow endpoints, and required routes. Examples: `S3 -> vertical trunk -> S1/common path`, `S2/S3 -> hollow circle -> minus`, `Linear -> f̂ -> [] -> fused feature`.
+- The visual-layout checklist records overlap, label wrapping, bracket/tensor spacing, line-through-text defects, feature-stack thickness, font-role drift, and color/rounding/shadow mismatches.
+- A finding should reference the failed checklist item when possible. Do not write only broad notes such as "right output is wrong" when a specific missing branch, wrong landing point, or bracket overlap is visible.
+- Repair rounds must re-check the same crop and checklist items, not only rerun validation or no-op gates.
+
+For high-fidelity work, the reviewer should compare only two images:
+- the original source image
+- the current replica PNG
+
+Do not give the reviewer pair/overlay images as the prompt when the original and replica are already available. A pair image is redundant with the two full images and often hides small connector or text defects through downscaling.
+
+Targeted crops are allowed as secondary reviewer inputs only when the current task is explicitly local and the full images are too small to judge the detail. In that case, send the original full image, the replica full image, and the smallest useful number of local source-vs-replica crop pairs. Record which crop(s) were actually inspected. The review contract is still anchored by the two full images.
+
+For exact/strict review packaging, call `make_review_assets.py --write-review-bundle` to write the manifest/templates. By default it does not generate global pairs, local crops, or overlays. Use:
+- `--include-global-pair` only for human navigation/audit records.
+- `--crops core arrow_dense caption` for hand-picked named crops.
+- `--region-crops all` only when you intentionally want every `metadata.region_plan` crop pair.
+- `--include-overlays` only for alignment-drift debugging.
+
+The reviewer should receive the two images and a concrete issue format. It should report specific visual differences, source appearance, replica appearance, impact on fidelity, focus regions, and the expected visible change after regeneration. Use script output only to package round evidence and to validate/export; the quality decision remains visual.
+
+If using a separate reviewer agent, give it only the source image, the replica image, and the issue format. Do not give it intended fixes, prior conclusions, pair/crop packs, script warnings, similarity scores, or old scene JSON. The reviewer validates visual fidelity; the main agent turns that into a fresh scene rebuild.
+
+Use the fixed reviewer prompt in `references/reviewer-two-image-prompt.md`.
+
+Do not stop at natural-language review notes. In strict work, the review loop must produce:
+
+1. `review_manifest.json` from `make_review_assets.py --write-review-bundle`
+2. `review_findings.json` from the visual reviewer
+3. `scene_rebuild_brief.json` from `review_findings_to_repair_plan.py`
+4. a regeneration packet from `prepare_regeneration_packet.py`
+5. a no-op proof from `round_noop_gate.py`
+
+`review_findings.json` should contain both defect findings and the review checklists used to find them. At minimum, include:
+- `topology_checklist`: visible source topology facts, each with an id, focus region, source fact, replica status, and pass/fail/uncertain status.
+- `visual_checklist`: local layout/style facts, each with an id, focus region, source expectation, replica status, and pass/fail/uncertain status.
+- findings that cite `checklist_refs` for failed checklist items when applicable.
+
+Use `uncertain` instead of inventing facts when a source crop is unclear. Ask for a higher-resolution source or user confirmation only when the uncertain item affects topology or final fidelity.
+
+After writing `review_findings.json`, run the checklist gate before generating the rebuild brief:
+
+```powershell
+python ${SKILL_DIR}\scripts\review_checklist_gate.py `
+  <review_findings.json> `
+  --manifest <review_manifest.json> `
+  --require-failed-refs `
+  --output-report <review_checklist_gate.json>
+```
+
+Then generate the rebuild brief with checklist enforcement:
+
+```powershell
+python ${SKILL_DIR}\scripts\review_findings_to_repair_plan.py `
+  <review_findings.json> `
+  --scene <prior.scene.json> `
+  --manifest <review_manifest.json> `
+  --require-checklists `
+  --output <scene_rebuild_brief.json>
+```
+
+If either command fails, fix the review findings/checklists instead of continuing with regeneration.
+
+The no-op gate is mandatory when claiming a new round improved the scene. It fails when:
+- the scene diff is metadata-only
+- only weak style fields changed
+- the rendered PNG pixel diff is zero
+
+If you have a `scene_rebuild_brief.json`, pass it into `round_noop_gate.py --rebuild-brief ...` so the report keeps the focus-region and likely-scene-id evidence for that round.
+
+Use `references/review-contract.md` for the structured review format and `references/renderer-effective-fields.json` for the current renderer-effective-field whitelist. During reauthoring, do not claim progress from notes, region-plan edits, review assets, or metadata changes alone.
+
+Use the fixed regeneration prompt in `references/full-scene-regeneration-prompt.md` when authoring the next full scene after a failed review.
+
+Use `scripts/prepare_regeneration_packet.py` to turn `scene_rebuild_brief.json` into a round-specific handoff packet and prompt file before the next LLM full-scene regeneration pass.
+If the packet step cannot recover both reviewer image paths, stop and fix the review bundle instead of continuing with an incomplete rebuild handoff.
+
+When several visual reviews say the replica looks like a semantic redraw instead of a source-faithful figure, stop component-level polishing and recalibrate the scene:
+- mark the source image's real outer frame, titled region boxes, input/core/output bboxes, and major bus lines in source-pixel coordinates
+- record those bindings in `metadata.region_plan` and on region nodes with `source_bbox_px` / `source_aspect_ratio`
+- keep region-local node density close to the source before drawing small labels
+- if you generate debug pairs/crops for yourself, compare only the selected focus regions and adjust region bboxes first
+- only after the region bboxes match should you tune fonts, shadows, gradients, arrowheads, and individual labels
+
+Do not replace this loop with a student/expert mode, whole-image template selector, or automatic template matching system. Reusable templates and examples are syntax references or first-pass seeds only; every high-fidelity result must still come from source-image visual analysis, source-pixel scene authoring, rendered PNG review, and visual reviewer findings.
+
+For repeated internal layer modules, choose the visual grammar from the source crop before rendering:
+- colored 2D strips: use `layer_sequence` with `block_style_mode: "colored_paper_strip"` and source-matched `block_fills`.
+- if source strips are colored, preserve them with `block_fill_policy: "preserve"` or `preserve_block_fills: true`; never leave `ignore_block_fills: true` on a colored sequence.
+
+Keep scene authoring and scene reauthoring separate:
+- authoring: build the first valid scene from the source image and source visual inventory
+- reauthoring: consume source/replica review findings, regenerate a fresh full scene, rerender, and prove the change with the no-op gate
+
+After review, do not patch the prior scene when the finding says the region is semantically wrong or the topology/component grammar changed; rebuild that scene or local subsystem from the source and findings. For narrow checklist failures after the topology is already correct, a small targeted repair is acceptable, but it still must be backed by the same local source crop, updated review findings/checklist status, and a no-op gate. The prior scene may be read as failure evidence, but it must not override source-image facts.
+- white 2D vertical strips: use `block_style_mode: "paper_vertical_strip"` and set `block_fill_policy: "white"` if old `block_fills` remain in the scene.
+- white 3D/high vertical blocks: use `block_style_mode: "paper_vertical_cuboid"` or `white_3d`; do not convert them to colored strips just because `block_fills` exists.
+- dense gate/projection/QKV modules should set `density_mode: "source_dense"` (or `dense: true`) after the region bbox is locked; do not enlarge the whole module to hide text/arrow problems.
+- if the source already has a surrounding module frame and only the repeated bars are visible, set `layer_sequence.frame_visible: false` instead of drawing a second inner frame.
+- if the source layer sequence has visible arrows between adjacent strips, keep them inside the component with `draw_internal_arrows: true` rather than scattering loose edge fragments.
+
+If visual review reports text wrapping in operators, formulas, CJK labels, or rotated layer labels, treat it as a renderer/schema or scene-box defect. Do not enlarge the whole module to hide the wrap; fix the text box policy, math/operator component, local font scale, or source-coordinate label box.
+
+Use `math_text` for hat variables such as `f̂`, `concat_operator` for visible `[]` concat brackets, and `brace_merge` for curly many-to-one merge braces. Do not model these as loose text glyphs or generic rectangles when the source shows a semantic operator/merge mark.
+
+For compact math labels with word-like subscripts such as `a_RGB`, `P_SAR`, `q_hrrp`, `f_fused`, or `S_i`, prefer `math_text` / `math_vector` with fragment subscript rendering when the subscript contains uppercase or multi-letter tokens. Compact Unicode is only safe for digits and true Unicode subscript letters; do not render `RGB`, `SAR`, `IR`, or `fused` with superscript-looking fallback glyphs. If visual review reports letters scattered vertically, split into `fuse d`, or raised like superscripts, treat that as renderer/schema debt and fix the component or local text box before coordinate polishing.
+
+For tensor-like feature maps, decide from the crop whether the source is a thick 3D cuboid stack, thin front-sheet stack, slanted-sheet stack, or oblique slab stack. Use `tensor_stack.stack_render_mode: "thin_feature_slabs"` for source crops with many narrow feature sheets and light perspective; use `feature_cuboids` only when the crop clearly shows thick black-edged cuboid blocks. A repeated review complaint that tensors look flat or too blocky is a component-mode error, not a coordinate issue.
+
+For final concat marks, use `concat_operator` with `glyph_mode: "source_bracket"` when the source shows a compact heavy `[]` bracket. Use `operator_node` only for circular or text operators; a small bracket-like fusion symbol should not become a white rectangle or oversized Concat box.
+
+For Top-k/probability panels, use `probability_bar_list` with `bar_value_label` and `bar_value_anchor: "bar_area"`, `"row"`, or `"after_bar"` based on the source crop. If bars run through the row text, reduce `bar_max_fraction` or move labels to `after_bar`; do not position row text as loose overlays or push it into bars with offsets unless the source visibly does that.
+In strict replica mode, do not leave panel internals on defaults. Record padding, axis position, bar start, row alignments, baseline offsets, and explicit shadow presence or `null`.
+
+When a defect is reported, classify it before editing:
+- component problem: the chosen component family is wrong for the crop
+- topology problem: branches/merges/boundaries are encoded with the wrong connection grammar
+- text problem: role, baseline, rotation, math attachment, or shrink behavior is wrong
+- style problem: padding, rounding, density, line weight, dash rhythm, gradient, or shadow is wrong after structure is already correct
+
+Use one repair order for exact replicas:
+1. component choice
+2. topology and anchors
+3. math text and rotated text
+4. container/title/content proportions
+5. shadows, gradients, line weight, dash rhythm
+
+If a local subsystem is still wrong after two micro-adjustment rounds, stop nudging coordinates and rebuild that local subsystem with the correct component or renderer rule.
+
+Treat these as blocking defects in strict replica mode:
+- broken or compressed vertical strip text
+- wrong or missing subscript / hat / Greek math glyph
+- line crossing through visible text
+- long cross-module flow that still lands center-to-center
+- long paper-flow segments that stay diagonal
+- concat/operator syntax rendered with the wrong component family
+- repeated strips, panels, or tensor geometry still depending on hidden defaults instead of explicit scene contract
+
+For cross-module flow, do not connect large modules center-to-center by default. Use boundary ports, buses, trunks, junctions, or explicit side anchors. For math-like text, do not keep it on plain `text_block` just because the font looks close enough; use `math_text`, `formula_text_block`, or run-based math fragments.
+
+For environment encoders and other tapered paper modules, use `dual_wing_encoder` with `shape_mode: "opposing_trapezoids"` or `custom_polygon` when the source is pinched/notched rather than a full-height three-part block. For brace aggregation near plus/sum nodes, use `brace_merge` with `brace_shape: "tight_curly"` and `waist_width_in` instead of a generic wavy brace when the source has a tight waist.
 
 ## Component Strategy
 
@@ -213,17 +424,25 @@ Supported node families:
 - `polygon_node`
 - `trapezoid_node`
 - `cuboid_node`
+- `tensor_stack`
 - `modality_spine`
 - `math_vector`
 - `math_text`
+- `feature_vector_stack`
 - `tfr_panel`
 - `operator_node`
+- `multi_port_junction`
+- `concat_operator`
+- `brace_merge`
 - `boundary_port`
 - `boundary_fanout`
 - `wave_signal`
 - `classifier_head`
+- `layer_sequence`
 - `text_block`
+- `caption_block`
 - `grid_matrix`
+- `token_grid`
 - `bracket`
 - `junction_point`
 - `image_tile`
@@ -265,6 +484,7 @@ Why this matters:
 13. For brackets with a middle merge arm, set `tick_positions: [0, 0.5, 1]`; a plain two-arm bracket is not enough for modality merge symbols.
 14. For cross-container flow, split the edge through `junction_point` nodes with `role: boundary_anchor`; set `allow_cross_container: true` only on the short bridge between anchors.
 15. For dense mini-module diagrams, keep all connectors axis-aligned with `hv`, `vh`, or explicit aligned points. A connector must not cross through a non-endpoint node.
+15a. When an exact paper-flow route has explicit points but still renders slightly diagonal, set `orthogonalize_points: true` or add the missing elbow point. Do not use `allow_diagonal: true` unless the source visibly has a diagonal callout/fan line.
 16. Run `scene_validate.py` after authoring. Treat route-quality warnings as defects, not cosmetic suggestions, before rendering through Visio.
 17. For repeated offset feature blocks, use `stacked_process`; do not author each visible layer as an independent process node unless each layer is a real semantic node.
 18. For module interiors such as AM-ResNet, encode intended alignment with `align_to_container` or `align_group`; do not rely on eyeballed y values.
@@ -290,8 +510,9 @@ Why this matters:
 38. Use `trapezoid_node` for quality heads, extractor heads, aggregation modules, and other wedge/trapezoid paper blocks. Set `orientation` and `pointed` so the narrow side or tip matches the source direction.
 39. Use `polygon_node` only when the shape cannot be expressed by `trapezoid_node`, `cuboid_node`, `notched_block`, or another semantic primitive. Include normalized points when authoring in source-pixel scenes.
 40. For formula/vector annotations such as `q = [q_RGB, q_IR, q_SAR]^T`, use `math_vector` instead of a plain multi-line `text_block`. This keeps brackets, entries, and the optional prefix aligned as editable shapes/text. Do not make formula labels connector endpoints.
+40a. For small variables and formula labels such as `g_tf`, `g_hrrp`, `f_fused`, `P_RGB`, `q_IR`, `s1`, `f1`, or `L_adv`, use `math_text` with `math_render_mode: "fragments"` and `text_fit: "math_label"` when the subscript has uppercase or word-like tokens. `compact_unicode` is allowed only for digit or true-subscript lowercase labels that visually match the source. Never leave them as raw text that Visio can wrap into `g_ / tf`, `f_fu / sed`, or superscript-like `RGB`.
 41. For wide multi-panel figures, create `audit_region` nodes for every titled panel even when the visible frame is drawn with `group_container`; this lets `scene_audit.py` review inputs, outputs, and cross-panel arrows panel by panel.
-42. For large source images, use `metadata.region_strategy: "region_first"` or `"tiled_subscenes"` before rendering. If the figure is too complex to reason about at full-page scale, author each region as a local subscene, validate it, then copy the region nodes into the full scene with the same style tokens.
+42. For large source images, use `metadata.region_strategy: "region_first"` or `"tiled_subscenes"` before rendering. Also add `metadata.region_plan` entries for global/input/core/output/arrow-dense/small-text/boundary areas, each with `source_bbox_px` and a target bbox/container. If the figure is too complex to reason about at full-page scale, author each region as a local subscene, validate it, then copy the region nodes into the full scene with the same style tokens.
 43. Do not let every region invent its own font sizes. Define a small scale and reuse it: frame titles, body labels, small labels, operator symbols, formula labels, and edge labels. If `scene_validate.py` reports same-type font spread, normalize the style before rendering.
 44. When reconstructing from cropped subregions, keep crop-local coordinates only during analysis. Convert to the full-page pixel coordinate system before final assembly so arrows and labels do not drift at seams.
 45. Use `scene_complexity.py` before full-page Visio output whenever the scene has roughly 30+ visible nodes, 35+ edges, or a very wide aspect ratio. Treat text-fit, overlap, uncovered-node, and dense-region warnings as actionable defects.
@@ -316,8 +537,8 @@ Why this matters:
 64. For loss formulas such as `L_adv` and `L_rec`, use `math_text` instead of raw underscore `text_block` strings. Raw underscores are a rebuild defect in exact paper-figure replicas.
 65. For Real/Generated TFR panels, use `tfr_panel` as the first-pass component. Do not split the panel into a rounded box, title labels, grid, input label, and a separate internal arrow unless there is a source-specific reason.
 66. When a render looks globally close but local details do not improve after one pass, run `scene_audit.py --fail-on-rebuild` and fix every `[REBUILD]` item before visual tuning.
-67. For GAN/TFR source images, start with `--template gan-tfr` whenever the topology matches. This is a generation-first capability, not a post-render cleanup step.
-68. Before rendering a legacy or hand-authored GAN/TFR scene, run `scene_autofix.py --recipe gan-tfr` once. If the recipe rewrites local grammar, validate and audit the fixed scene instead of continuing from the old file. The renderer also runs this pass by default for GAN/TFR scenes and writes `<basename>.autofixed.scene.json`; inspect that file when debugging first-pass generation.
+67. For GAN/TFR source images, use `--template gan-tfr` only for draft/bootstrap authoring. Do not treat a template-seeded scene as valid strict-replica capability evidence.
+68. Before rendering a draft/bootstrap or legacy GAN/TFR scene, you may run `scene_autofix.py --recipe gan-tfr` once. If the recipe rewrites local grammar, validate and audit the fixed scene instead of continuing from the old file. For strict/exact work, do not rely on implicit render-time autofix; use `--autofix-gan-tfr` only as an explicit helper path and then re-author a fresh strict scene from source inventory.
 69. Use `loss_region` for the dashed adversarial/evaluation area when the title and formulas belong to one local subsystem. Use `dashed_region` only when the frame has no formula semantics or the source requires separate child nodes.
 70. When a `loss_region` and its target block overlap horizontally, route feedback as short vertical boundary stubs into `target:top@ratio` or `target:bottom@ratio`. Do not connect from loss-frame corners to `target:left/right`; that usually creates the false "dashed box plus extra arrow" artifact.
 71. If the outer loop arrowhead still looks kinked after smoothing, change the semantic geometry (`end_tangent_point`, sampled points, or local loop subsystem) before nudging unrelated nodes. The arrowhead tangent is part of the component grammar, not a final polish detail.
@@ -332,6 +553,19 @@ Why this matters:
 80. Use math-capable fonts for operators and formula fragments: `Cambria Math`, `Cambria`, or `Times New Roman` depending on source style. Do not render `+`, `×`, `⊗`, or subscript formulas with a random UI font unless the source visibly does.
 81. For Chinese or mixed Chinese/English diagrams, use `font_role: "cjk_sans"` or `cjk_serif`; otherwise Visio may silently substitute glyphs and shift text metrics.
 82. Review the `Typography Review` section in `scene_audit.py` output before coordinate polishing. Font fallbacks can change text width and make a previously aligned layout look wrong.
+83. For paper figures with repeated feature slabs, use `tensor_stack` instead of many separate `cuboid_node` shapes. Use `stack_render_mode: "slanted_sheets"`/`paper_sheets` for thin parallelogram station/output features, `oblique_slabs` for heavier 3D slabs, and `thin_sheets` for flat front-face stacks. Tune `layers`, `layer_dx_in`, `layer_dy_in`, `depth_x_in`, `depth_y_in`, and `skew_x_in` to match the visual stack while keeping it one semantic tensor node.
+84. For colored sequence/index tiles with readable numbers, use `token_grid`. If the source cells are square, set `square_cells: true` and anchor with `grid_align_x`/`grid_align_y` instead of stretching cells to fill the bbox. Use `grid_matrix` only for contiguous shared-line matrices without per-cell text. Do not model padded prefix batches or top-k probability rows as dozens of unrelated `process_box` nodes.
+85. For titled modules containing repeated Linear/ReLU/LayerNorm/Dropout/Q/K/V bars, use `layer_sequence` with `orientation: "horizontal"` or `"horizontal_bars"`. If the source layer bars are tall 2D rounded white strips, use `block_style_mode: "paper_vertical_strip"`; use 3D/cuboid modes only when the source visibly has top/side faces. Use `classifier_head` only when the source shows classifier-specific internal arrows or fan-out; otherwise `layer_sequence` preserves the visual layer grammar with less scene drift.
+85a. For containers whose internals are stacked horizontal rounded rows, such as LocalEchoGRU or shallow backbone layers, use `layer_sequence` with `orientation: "vertical_stack"` and `block_text_angle_deg: 0`. Do not represent these as side-by-side vertical bars.
+85b. For compact source vectors, availability flags, small modality rows, and thin token stacks, use `feature_vector_stack` or `token_grid` with source-bound cell count and spacing. Do not approximate these as one large process box if individual cells or ports are visible in the crop.
+85c. For many-to-one or one-to-many paper junctions where several arrows share a visible spine, use `multi_port_junction`, `merge_bus`, or explicit `junction_point` ports. Use explicit dict ports with `length_in: 0` when the source has no visible ticks; this prevents stray short stubs at fusion/brace boundaries. Do not let long sparse arrows jump across modules without a bus, junction, boundary port, or region-plan justification.
+85d. For probability panels, keep `probability_bar_list` as the semantic unit and tune `bar_max_fraction`, `bar_value_anchor`, and row widths after crop review. A pass where the blue bars visibly cross the text is not visually acceptable.
+85e. For figure captions, page headers, and labels with mixed bold/regular text, use `caption_block` with ordered runs. Do not collapse them into one untyped text block when the source styling is visually important.
+86. When authoring exact replicas in source pixels, give `tensor_stack`, `token_grid`, and `layer_sequence` local dimensions in source-pixel units as well. The renderer scales these fields with the page; mixing pixel node positions with inch-sized internal gaps causes visible local distortion.
+87. During visual review, explicitly check whether repeated slabs, token grids, formulas, and internal layer sequences were expressed by these semantic components. If they were faked with loose boxes and lines, classify the issue as scene organization or component-usage debt, not as a coordinate polish problem.
+88. During visual review, inspect local crops for text and formula wrapping. Broken `GELU`, `LayerNorm`, CJK labels, or subscript variables are blocking/important visual defects even if validate/audit passes. Fix with role-specific fonts, `text_fit`, smaller local font scales, or `math_text`; do not hide the problem by enlarging the whole module.
+89. For labels such as `f_tf`, `g_hrrp`, `f_fused`, and `S_i`, use `math_text` or `math_label_box` so only the visible variable is the base and the rest is subscript. If visual review reports `f_t^f`-like rendering, split letters, or `fuse d` spacing, classify it as formula rendering failure.
+90. For every complex figure iteration, record the reviewed images, main visual differences, cross-image common issues, skill changes, improved/unchanged/regressed figures, and remaining failures. A global contact sheet can help navigation but is not valid evidence for fine-detail acceptance. Prefer two full images plus targeted local crops over global pair images for fine-detail review.
 
 ## References
 
@@ -345,6 +579,8 @@ Why this matters:
 - `templates/examples/gan_tfr_full.scene.json`: canonical first-pass GAN/TFR template using `tfr_panel`, `loss_region`, `math_text`, smooth `loop_arrow`, and bundled backprop arrows
 - `scripts/scene_complexity.py`: preflight report for large/dense figures before Visio rendering
 - `scripts/font_inventory.py`: local Windows font inventory and preferred role fallback check
+- `scripts/stage_source_image.py`: copies a source image into `source/original.<ext>` and records hashes for stable strict review manifests
+- `scripts/review_checklist_gate.py`: validates `topology_checklist`, `visual_checklist`, local source-image paths, and `checklist_refs` before rebuild planning
 - `scripts/scene_autofix.py`: deterministic GAN/TFR local grammar upgrade pass before Visio rendering
 - `docs/updates/2026-05-19-multimodal-paper-figure.md`: detailed analysis of a complex multimodal paper figure and the related component upgrade
 

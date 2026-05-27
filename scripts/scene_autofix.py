@@ -39,6 +39,27 @@ def change(changes: list[str], message: str) -> None:
         changes.append(message)
 
 
+def record_recipe_application(scene: dict[str, Any], recipe: str, changes: list[str], applied_by: str) -> None:
+    metadata = scene.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        scene["metadata"] = metadata
+    history = metadata.get("autofix_history")
+    if not isinstance(history, list):
+        history = []
+    entry = {
+        "recipe": recipe,
+        "applied_by": applied_by,
+        "change_count": len(changes),
+        "changes": list(changes),
+    }
+    if not history or canonical_json(history[-1]) != canonical_json(entry):
+        history.append(entry)
+    metadata["autofix_history"] = history
+    metadata["last_autofix_recipe"] = recipe
+    metadata["last_autofix_applied_by"] = applied_by
+
+
 def endpoint_node_id(endpoint: Any) -> str | None:
     if not isinstance(endpoint, str):
         return None
@@ -661,6 +682,8 @@ def main() -> int:
     else:
         raise ValueError("Use --output, --in-place, or --dry-run.")
 
+    if changes:
+        record_recipe_application(scene, args.recipe, changes, "visiomaster.scene_autofix")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(scene, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote scene: {output_path}")
