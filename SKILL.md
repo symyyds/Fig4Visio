@@ -97,6 +97,29 @@ Record the inventory in `metadata.source_visual_inventory` before the first rend
 - `unknown_text_policy`: use `mark_unreadable_do_not_invent` for unclear tiny text.
 - per-region `source_bbox_px`, required visible labels/formulas, component motifs, edge motifs, port/boundary/dashed-frame notes, uncertainty notes, and text layout facts.
 
+Before authoring the first `edges` array for an exact replica, run a separate arrow-inventory pass from the source image. The goal is to lock topology before any Visio PNG exists. For arrow-dense local structures, this pass is not optional bookkeeping; it is the scene driver:
+- record every source-visible arrow in `metadata.arrow_plan`
+- each visible arrow or visible line segment gets its own independent `arrow_plan_id`; do not describe a whole local subgraph or multi-hop chain with one plan entry
+- each entry needs `id`, `from_visual_object`, `from_anchor_description`, `to_visual_object`, `to_anchor_description`, `route_shape`, `line_style`, `arrowhead`, `semantic_intent`, `source_bbox_px`, `must_not_cross`, `relative_position_facts`, direction, endpoint/boundary facts, and certainty
+- use `semantic_intent: "data_flow"` for normal flow, `"feedback"`/`"loss_backprop"` for dashed return paths, `"boundary_handoff"`/`"frame_output"` for frame-edge arrows, `"merge"`/`"fan_in"` for many-to-one joins, `"fork"`/`"fan_out"` for one-to-many branches, and `"loop_update"` for outer cycles
+- use route shapes such as `straight_horizontal`, `straight_vertical`, `orthogonal`, `smooth_curve`, or `loop`; do not leave major arrows as vague `auto`
+- after authoring edges, bind every source-visible edge with `arrow_plan_id`
+- one `arrow_plan_id` may bind to only one scene edge by default. If one source arrow truly needs multiple scene segments, every segment edge must declare `same_source_arrow: true`, `segment_index`, and `segment_count`
+- when a source arrow is unreadable, mark `certainty: "uncertain"` and do not invent its destination
+
+Treat `metadata.arrow_plan` as the source-truth checklist for later visual review: the reviewer should be able to say whether `A001`, `A002`, etc. match the original, rather than writing broad comments like "arrows are wrong".
+
+For attention-like motifs, decompose the visual grammar before drawing scene edges. A source crop that looks like `K/Q -> multiply -> score matrix -> value multiply -> value matrix -> Concat` is not one edge. Record the local motif, then inventory each visible connector separately, for example:
+- `A101`: `K_w` right edge -> `qk_mul` left edge, horizontal, no arrowhead
+- `A102`: `Q_a` right/top edge -> `qk_mul` lower-left edge, short diagonal/curved, no arrowhead
+- `A103`: `qk_mul` right edge -> score matrix left edge, horizontal, arrowhead end
+- `A104`: `V_w` right edge -> value multiply left edge, horizontal, no arrowhead
+- `A105`: score matrix upper-right corner -> value multiply lower-left edge, diagonal, no arrowhead
+- `A106`: value multiply right edge -> value matrix left edge, horizontal, arrowhead end
+- `A107`: value matrix top edge -> Concat bottom edge, vertical, arrowhead end
+
+When a local diagram matches a known motif such as `attention_score_motif`, `value_weighting_motif`, `residual_add_norm_motif`, or `concat_merge_motif`, generate the local scene from that motif grammar first. For `attention_score_motif`, Q/K feed the left-side multiply, Softmax is a floating label rather than an edge endpoint, the multiply output enters the score matrix, the score matrix connects diagonally to value multiplication, value multiplication enters the value matrix, and the value matrix outputs vertically to Concat.
+
 For paper-style exact replicas, `source_visual_inventory` should record precise layout facts, not only module names:
 - text alignment: left / center / right and baseline relation
 - intended line breaks and no-wrap expectations
@@ -215,6 +238,8 @@ python ${SKILL_DIR}\scripts\scene_audit.py <scene.json> --fail-on-rebuild
 
 In strict mode, missing `source_visual_inventory`, missing `region_plan`, template-seeded starts, and recipe-rewritten exact scenes are treated as gate failures, not informal warnings. If validate/audit prints a blocking contract failure or `[REBUILD]` item, stop coordinate nudging. Rebuild that local subsystem with the correct semantic component (`loop_arrow`, `dashed_region`, `dashed_feedback_path`, `boundary_port`, etc.) before doing any more visual polishing.
 
+In strict mode, missing `metadata.arrow_plan`, missing `arrow_plan_id` bindings, or route-shape violations are also gate failures. Do not render a strict replica whose long arrows still rely on center-to-center `auto` routing when the source shows fixed horizontal, vertical, boundary, merge, fork, feedback, or loop grammar.
+
 For exact replica work, validation passing is necessary but not sufficient. Render a PNG and compare it with the source for:
 - page aspect ratio
 - container bounds
@@ -229,6 +254,13 @@ Exact mode should run as a two-stage production loop, not one rushed render:
 2. second render/review stage: fix text layout, caption behavior, shadows, local spacing, and visual polish
 
 If a higher-level component stays visually wrong after two strict reviews, rebuild that local subsystem with smaller components or primitives. Do not keep nudging the whole page around one stubborn panel or text cluster.
+
+For arrow-dense local structures, review the local crop before merging it into the full scene:
+1. author a local scene such as `attention_core.scene.json` from the local source crop and motif/arrow plan
+2. validate it with strict arrow-plan checks
+3. render only that local scene
+4. compare the local source crop and local replica crop as a pair
+5. merge into the full scene only after every arrow-plan checklist item passes
 
 Do not ship after a first-pass exact render unless the second review round is already represented and visually clean.
 
@@ -319,6 +351,17 @@ python ${SKILL_DIR}\scripts\review_findings_to_repair_plan.py `
 ```
 
 If either command fails, fix the review findings/checklists instead of continuing with regeneration.
+
+For arrow-dense regions, the review checklist must be per-arrow, not only per-region. Include one checklist item per `arrow_plan_id`, such as:
+- `[ ] A101 K_w -> qk_mul matches source`
+- `[ ] A102 Q_a -> qk_mul matches source`
+- `[ ] A103 qk_mul -> score grid matches source`
+- `[ ] A104 V_w -> value_mul matches source`
+- `[ ] A105 score grid -> value_mul matches source`
+- `[ ] A106 value_mul -> value grid matches source`
+- `[ ] A107 value grid -> Concat matches source`
+
+Blocking review findings should name the exact arrow id and mismatch class: `unbound_source_arrows`, `multi_edge_plan_misuse`, `source_anchor_mismatch`, `route_shape_mismatch`, or `motif_rule_violation`.
 
 The no-op gate is mandatory when claiming a new round improved the scene. It fails when:
 - the scene diff is metadata-only
@@ -546,6 +589,7 @@ Why this matters:
 73. For `loss_region` titles, prefer `title_position: "inside"` or a header-cutout layout. Do not let the dashed frame cross a long title; split the title line or widen the region first.
 74. For exact or GAN/TFR renders, do not call `scene_to_visio.py` as a blind final step. Run the rebuild gate first, or let the renderer's built-in gate stop the export when `[REBUILD]` items remain.
 75. If a dashed feedback path looks like a tiny isolated arrow fragment, treat that as a semantic-route failure, not a cosmetic issue. Rebuild it as one `dashed_feedback_path` or a bus/port route instead of preserving the fragment.
+76. Before writing edges for exact replicas, produce `metadata.arrow_plan` from source-image visual inspection. Then bind each source-visible edge with `arrow_plan_id`; run `scene_validate.py --strict` before rendering so missing arrows, diagonal drift, wrong boundary endpoints, fragmented feedback paths, and broken loop arrows fail early.
 76. Do a typography pass for exact replicas. Identify whether the source uses serif, sans, math, mono, CJK, or mixed typography before finalizing nodes; do not let every text node inherit a generic default by accident.
 77. Use `font_family_candidates` and `font_role` instead of a single fragile font name when exact family matching is uncertain. The renderer resolves to the first installed close match.
 78. If the source font is known, set `source_font_family` as well as `font_family`/`font_family_candidates`. This lets audit catch the case where the font exists locally but the scene still renders with the wrong family.

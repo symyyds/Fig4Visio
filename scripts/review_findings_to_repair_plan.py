@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scene_validate import arrow_plan_items, edge_arrow_plan_id
+
 
 def load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -39,6 +41,7 @@ def finding_digest(finding: dict[str, Any]) -> dict[str, Any]:
         "impact_on_fidelity": finding.get("impact_on_fidelity"),
         "focus_regions": focus_regions,
         "likely_scene_ids": likely_scene_ids,
+        "checklist_refs": normalize_string_list(finding.get("checklist_refs")),
         "expected_visible_change": finding.get("expected_visible_change"),
         "legacy_patch_fields": {
             "region": finding.get("region"),
@@ -46,6 +49,115 @@ def finding_digest(finding: dict[str, Any]) -> dict[str, Any]:
             "patch_kind": finding.get("patch_kind"),
         },
     }
+
+
+def node_motif_edges(node: dict[str, Any]) -> list[dict[str, Any]]:
+    value = node.get("motif_edges")
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def collect_arrow_repair_targets(
+    scene: dict[str, Any] | None,
+    checklist_report: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(scene, dict):
+        return []
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    plans = arrow_plan_items(metadata)
+    if not isinstance(plans, list):
+        return []
+
+    plan_by_id = {
+        str(plan.get("id", "")).strip(): plan
+        for plan in plans
+        if isinstance(plan, dict) and str(plan.get("id", "")).strip()
+    }
+    edges = scene.get("edges", []) if isinstance(scene.get("edges"), list) else []
+    scene_edges_by_plan: dict[str, list[str]] = {}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        plan_id = edge_arrow_plan_id(edge)
+        if plan_id:
+            scene_edges_by_plan.setdefault(plan_id, []).append(str(edge.get("id", "<missing-id>")))
+
+    motif_edges_by_plan: dict[str, list[dict[str, Any]]] = {}
+    nodes = scene.get("nodes", []) if isinstance(scene.get("nodes"), list) else []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id", "<missing-node>"))
+        node_type = str(node.get("type", ""))
+        for motif_edge in node_motif_edges(node):
+            plan_id = edge_arrow_plan_id(motif_edge)
+            if not plan_id:
+                continue
+            motif_edges_by_plan.setdefault(plan_id, []).append(
+                {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "motif_edge_id": motif_edge.get("id"),
+                    "editable_fields": [
+                        "motif_edges",
+                        "operator_x_ratio",
+                        "operator_y_ratio",
+                        "grid_x_ratio",
+                        "grid_y_ratio",
+                        "grid_w_ratio",
+                        "grid_h_ratio",
+                        "label",
+                        "label_position",
+                        "label_offset_x_in",
+                        "label_offset_y_in",
+                    ],
+                }
+            )
+
+    referenced_ids: set[str] = set()
+    for item in checklist_report.get("topology_checklist", []):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id", "")).strip()
+        arrow_id = str(item.get("arrow_plan_id", "")).strip() or (item_id if item_id in plan_by_id else "")
+        status = str(item.get("status", "")).lower()
+        if arrow_id and status in {"fail", "uncertain"}:
+            referenced_ids.add(arrow_id)
+    for finding in findings:
+        for ref in normalize_string_list(finding.get("checklist_refs")):
+            if ref in plan_by_id:
+                referenced_ids.add(ref)
+
+    targets: list[dict[str, Any]] = []
+    for plan_id in sorted(referenced_ids):
+        plan = plan_by_id.get(plan_id)
+        if not plan:
+            continue
+        targets.append(
+            {
+                "arrow_plan_id": plan_id,
+                "plan": plan,
+                "scene_edge_ids": scene_edges_by_plan.get(plan_id, []),
+                "motif_bindings": motif_edges_by_plan.get(plan_id, []),
+                "editable_scene_fields": [
+                    "from",
+                    "to",
+                    "from_point",
+                    "to_point",
+                    "points",
+                    "route",
+                    "curve_mode",
+                    "style.line",
+                    "style.end_arrow",
+                    "allow_diagonal",
+                    "allow_cross_container",
+                ],
+                "repair_hint": "Use this mapping as the concrete scene entry point for the cited checklist failure; do not rely only on natural-language arrow comments.",
+            }
+        )
+    return targets
 
 
 def extract_reviewer_inputs(findings_doc: dict[str, Any], manifest_doc: dict[str, Any] | None) -> dict[str, str | None]:
@@ -237,6 +349,8 @@ def main() -> int:
     focus_regions = derive_focus_regions(findings)
     schema_warnings = legacy_schema_warnings(findings)
     checklist_report = validate_checklists(findings_doc, findings, args.require_checklists)
+    prior_scene = load_json(Path(args.scene).resolve()) if args.scene else None
+    arrow_repair_targets = collect_arrow_repair_targets(prior_scene, checklist_report, findings)
 
     rebuild_brief = {
         "schema_version": "0.2",
@@ -271,6 +385,7 @@ def main() -> int:
         "visual_checklist": checklist_report["visual_checklist"],
         "checklist_validation": checklist_report["checklist_validation"],
         "findings_digest": [finding_digest(finding) for finding in findings],
+        "arrow_plan_repair_targets": arrow_repair_targets,
         "llm_regeneration_inputs": [
             "original source image",
             "current replica image",

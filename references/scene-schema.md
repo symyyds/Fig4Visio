@@ -140,6 +140,90 @@ Rules for `source_visual_inventory`:
 - Use old scenes and old visual reviews only as failure evidence. A new capability evaluation scene should be authored fresh from this inventory.
 - A batch script may export multiple already-authored scenes, but a batch script that writes all scenes is not evidence that the skill can reconstruct new images from visual analysis.
 
+For exact replicas, add an arrow inventory before authoring edges. This is a source-image visual contract: it records which arrow connects what, whether it is straight/orthogonal/curved, where it lands, and whether it carries an arrowhead. Scene edges should reference these entries through `arrow_plan_id`.
+
+```json
+{
+  "metadata": {
+    "arrow_plan": [
+      {
+        "id": "A001",
+        "source_region": "encoder_to_decoder",
+        "source_fact": "A solid horizontal arrow leaves the encoder right boundary and enters the decoder left boundary.",
+        "from_visual_object": "encoder",
+        "from": "encoder right boundary",
+        "from_anchor_description": "right edge midpoint",
+        "to_visual_object": "decoder",
+        "to": "decoder left boundary",
+        "to_anchor_description": "left edge midpoint",
+        "from_anchor": "right@0.50",
+        "to_anchor": "left@0.50",
+        "direction": "left_to_right",
+        "route_shape": "straight_horizontal",
+        "line_style": "solid",
+        "arrowhead": "end",
+        "semantic_intent": "data_flow",
+        "source_bbox_px": [100, 120, 420, 145],
+        "must_not_cross": ["decoder label", "top caption"],
+        "relative_position_facts": ["source and target are horizontally aligned"],
+        "must_be_axis_aligned": true,
+        "must_not_cross_text": true,
+        "certainty": "certain"
+      }
+    ]
+  }
+}
+```
+
+Supported `semantic_intent` values are:
+
+- `data_flow`, `control_flow`
+- `feedback`, `loss_backprop`
+- `boundary_handoff`, `frame_output`
+- `merge`, `fan_in`
+- `fork`, `fan_out`
+- `loop_update`
+- `annotation`, `callout`
+
+Supported `route_shape` values are `straight`, `straight_horizontal`, `straight_vertical`, `horizontal`, `vertical`, `diagonal`, `short_diagonal`, `orthogonal`, `elbow`, `right_angle`, `hv`, `vh`, `curved`, `smooth_curve`, `loop`, and `freeform`.
+
+Rules for `arrow_plan`:
+
+- Every source-visible arrow in strict replica work should have an `arrow_plan` entry before the first `scene.json` is authored.
+- Every visible arrow or visible line segment should have its own independent `arrow_plan_id`. Do not use one plan entry to describe a local chain or subgraph.
+- Every source-visible scene edge should reference one entry with `arrow_plan_id`.
+- One `arrow_plan_id` may bind to only one scene edge by default. If a single source arrow must be represented as multiple scene segments, each segment edge must set `same_source_arrow: true`, `segment_index`, and `segment_count`.
+- In strict mode, each active plan should record `from_visual_object`, `from_anchor_description`, `to_visual_object`, `to_anchor_description`, `route_shape`, `line_style`, `arrowhead`, `semantic_intent`, `source_bbox_px`, `must_not_cross`, and `relative_position_facts`.
+- Use `certainty: "uncertain"` only when the source crop is genuinely unreadable; do not invent a connector.
+- `feedback` and `loss_backprop` should map to `dashed_feedback_path`.
+- `boundary_handoff` and `frame_output` should use `boundary_port` / `boundary_arrow`.
+- `merge` / `fan_in` should terminate at a `junction_point`, `merge_bus`, or `multi_port_junction`.
+- `fork` / `fan_out` should originate from a `junction_point`, `merge_bus`, or `multi_port_junction`.
+- `loop_update` should use one continuous `loop_arrow`, not several line fragments plus a detached arrowhead.
+- `scene_validate.py --strict` treats missing or violated arrow-plan bindings as errors.
+
+For local attention-like diagrams, record `metadata.local_motifs` or region-level motif facts before writing edges. Motif names can include `attention_score_motif`, `value_weighting_motif`, `residual_add_norm_motif`, and `concat_merge_motif`. Motif rules are source-level constraints, not decorative labels; for example Softmax in an attention-score motif is a floating label and should not become an edge endpoint.
+
+When a motif renderer draws internal connectors that do not appear in the top-level `edges[]` array, expose those connectors in the motif node as `motif_edges`. Each `motif_edges[]` item should include `id`, `arrow_plan_id`, internal `from`/`to` descriptions or anchors, `route_shape`, `line_style`, and `arrowhead`. Validators and repair planning treat `edges[]` and `nodes[].motif_edges[]` together for arrow-plan coverage.
+
+```json
+{
+  "id": "upper_attention_score",
+  "type": "attention_score_motif",
+  "motif_edges": [
+    {
+      "id": "upper_attention_score.operator_to_grid",
+      "arrow_plan_id": "A103",
+      "from": "operator_right",
+      "to": "grid_left",
+      "route_shape": "straight_horizontal",
+      "line_style": "solid",
+      "arrowhead": "end"
+    }
+  ]
+}
+```
+
 For strict 1:1 work, distinguish semantic redraw and true replica explicitly:
 
 - `replica_review_mode: "strict_replica"` means the scene will be judged on font behavior, padding, rounding, shadow, connector landing points, and crop-level detail.
@@ -1512,6 +1596,7 @@ Optional edge fields:
 
 ```json
 {
+  "arrow_plan_id": "A001",
   "label": "Optional label",
   "allow_diagonal": false,
   "allow_cross_container": false,

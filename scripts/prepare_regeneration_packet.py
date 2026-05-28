@@ -104,15 +104,88 @@ def finding_section(findings: list[dict[str, Any]]) -> str:
         expected_visible_change = str(finding.get("expected_visible_change", "")).strip()
         focus_regions = normalize_string_list(finding.get("focus_regions"))
         likely_scene_ids = normalize_string_list(finding.get("likely_scene_ids"))
+        checklist_refs = normalize_string_list(finding.get("checklist_refs"))
         rows.append(f"- `{finding_id}` [{severity}] {summary}")
         if focus_regions:
             rows.append(f"  - focus_regions: {', '.join(focus_regions)}")
         if likely_scene_ids:
             rows.append(f"  - likely_scene_ids: {', '.join(likely_scene_ids)}")
+        if checklist_refs:
+            rows.append(f"  - checklist_refs: {', '.join(checklist_refs)}")
         if visible_diff:
             rows.append(f"  - visible_diff: {visible_diff}")
         if expected_visible_change:
             rows.append(f"  - expected_visible_change: {expected_visible_change}")
+    return "\n".join(rows) + "\n"
+
+
+def checklist_section(title: str, items: list[dict[str, Any]]) -> str:
+    if not items:
+        return f"## {title}\n\n- none recorded\n"
+    rows = [f"## {title}", ""]
+    for item in items:
+        item_id = str(item.get("id", "UNNAMED")).strip() or "UNNAMED"
+        status = str(item.get("status", "unspecified"))
+        focus_region = str(item.get("focus_region", "")).strip()
+        source_fact = str(item.get("source_fact", item.get("source_expectation", ""))).strip()
+        replica_status = str(item.get("replica_status", "")).strip()
+        arrow_plan_id = str(item.get("arrow_plan_id", "")).strip()
+        rows.append(f"- `{item_id}` [{status}] {source_fact}")
+        if arrow_plan_id:
+            rows.append(f"  - arrow_plan_id: `{arrow_plan_id}`")
+        if focus_region:
+            rows.append(f"  - focus_region: {focus_region}")
+        if replica_status:
+            rows.append(f"  - replica_status: {replica_status}")
+    return "\n".join(rows) + "\n"
+
+
+def arrow_repair_targets_section(targets: list[dict[str, Any]]) -> str:
+    if not targets:
+        return "## Arrow Plan Repair Targets\n\n- none recorded\n"
+    rows = ["## Arrow Plan Repair Targets", ""]
+    for target in targets:
+        arrow_id = str(target.get("arrow_plan_id", "UNNAMED")).strip() or "UNNAMED"
+        scene_edges = normalize_string_list(target.get("scene_edge_ids"))
+        motif_bindings = target.get("motif_bindings", [])
+        editable_fields = normalize_string_list(target.get("editable_scene_fields"))
+        rows.append(f"- `{arrow_id}`")
+        if scene_edges:
+            rows.append(f"  - scene_edge_ids: {', '.join(scene_edges)}")
+        if isinstance(motif_bindings, list) and motif_bindings:
+            binding_labels = []
+            for binding in motif_bindings:
+                if isinstance(binding, dict):
+                    node_id = binding.get("node_id", "<node>")
+                    motif_edge_id = binding.get("motif_edge_id", "<motif_edge>")
+                    binding_labels.append(f"{node_id}.{motif_edge_id}")
+            if binding_labels:
+                rows.append(f"  - motif_bindings: {', '.join(binding_labels)}")
+        if editable_fields:
+            rows.append(f"  - editable_fields: {', '.join(editable_fields)}")
+        plan = target.get("plan")
+        if isinstance(plan, dict):
+            expected = plan.get("source_fact") or f"{plan.get('from_visual_object', plan.get('from'))} -> {plan.get('to_visual_object', plan.get('to'))}"
+            rows.append(f"  - expected_source_arrow: {expected}")
+    return "\n".join(rows) + "\n"
+
+
+def checklist_validation_section(validation: dict[str, Any]) -> str:
+    if not validation:
+        return "## Checklist Validation\n\n- none recorded\n"
+    rows = ["## Checklist Validation", ""]
+    failed_ids = normalize_string_list(validation.get("failed_ids"))
+    errors = normalize_string_list(validation.get("errors"))
+    warnings = normalize_string_list(validation.get("warnings"))
+    required = validation.get("required")
+    rows.append(f"- required: {required}" if required is not None else "- required: not recorded")
+    rows.append(f"- failed_ids: {', '.join(failed_ids)}" if failed_ids else "- failed_ids: none")
+    if errors:
+        rows.append("- errors:")
+        rows.extend(f"  - {item}" for item in errors[:12])
+    if warnings:
+        rows.append("- warnings:")
+        rows.extend(f"  - {item}" for item in warnings[:12])
     return "\n".join(rows) + "\n"
 
 
@@ -155,9 +228,21 @@ def main() -> int:
     findings_digest = rebuild_brief.get("findings_digest", [])
     if not isinstance(findings_digest, list):
         findings_digest = []
+    topology_checklist = rebuild_brief.get("topology_checklist", [])
+    if not isinstance(topology_checklist, list):
+        topology_checklist = []
+    visual_checklist = rebuild_brief.get("visual_checklist", [])
+    if not isinstance(visual_checklist, list):
+        visual_checklist = []
+    checklist_validation = rebuild_brief.get("checklist_validation", {})
+    if not isinstance(checklist_validation, dict):
+        checklist_validation = {}
+    arrow_plan_repair_targets = rebuild_brief.get("arrow_plan_repair_targets", [])
+    if not isinstance(arrow_plan_repair_targets, list):
+        arrow_plan_repair_targets = []
 
     packet = {
-        "schema_version": "0.1",
+        "schema_version": "0.2",
         "figure_id": figure_id,
         "round": round_index,
         "mode": "rebuild_full_scene",
@@ -172,7 +257,11 @@ def main() -> int:
         "prior_scene_policy": rebuild_brief.get("prior_scene_policy"),
         "required_rebuild_rules": rebuild_brief.get("required_rebuild_rules", []),
         "rebuild_focus_regions": rebuild_brief.get("rebuild_focus_regions", []),
+        "topology_checklist": topology_checklist,
+        "visual_checklist": visual_checklist,
+        "checklist_validation": checklist_validation,
         "findings_digest": findings_digest,
+        "arrow_plan_repair_targets": arrow_plan_repair_targets,
         "fixed_prompt_references": {
             "review_prompt_reference": review_prompt_reference,
             "regeneration_prompt_reference": regeneration_prompt_reference,
@@ -186,6 +275,8 @@ def main() -> int:
         "execution_contract": [
             "Use the original image and current replica image as the primary visual evidence.",
             "Use structured review findings to author a brand-new full scene.",
+            "Use topology_checklist, visual_checklist, and arrow_plan_repair_targets as explicit regeneration inputs.",
+            "For cited arrow ids, repair the mapped scene_edge_ids or motif_bindings rather than relying on broad natural-language arrow notes.",
             "Do not patch or copy prior-scene geometry.",
             "Render the new scene and pass it through the no-op gate before claiming a new round.",
         ],
@@ -227,6 +318,14 @@ def main() -> int:
             "## Findings Digest",
             "",
             finding_section([item for item in findings_digest if isinstance(item, dict)]).rstrip(),
+            "",
+            checklist_section("Topology Checklist", [item for item in topology_checklist if isinstance(item, dict)]).rstrip(),
+            "",
+            checklist_section("Visual Checklist", [item for item in visual_checklist if isinstance(item, dict)]).rstrip(),
+            "",
+            checklist_validation_section(checklist_validation).rstrip(),
+            "",
+            arrow_repair_targets_section([item for item in arrow_plan_repair_targets if isinstance(item, dict)]).rstrip(),
             "",
             "## Supporting References",
             "",

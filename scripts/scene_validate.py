@@ -76,6 +76,48 @@ STRICT_REGION_CATEGORY_TOKENS = {
     "caption": {"caption", "fig", "legend"},
 }
 STRICT_REQUIRED_REGION_CATEGORIES = ("global", "input", "core", "output", "arrow_dense", "small_text")
+ARROW_PLAN_INTENTS = {
+    "data_flow",
+    "control_flow",
+    "feedback",
+    "loss_backprop",
+    "boundary_handoff",
+    "frame_output",
+    "merge",
+    "fan_in",
+    "fork",
+    "fan_out",
+    "loop_update",
+    "annotation",
+    "callout",
+}
+ARROW_PLAN_ROUTE_SHAPES = {
+    "straight",
+    "straight_horizontal",
+    "straight_vertical",
+    "horizontal",
+    "vertical",
+    "diagonal",
+    "short_diagonal",
+    "orthogonal",
+    "elbow",
+    "right_angle",
+    "hv",
+    "vh",
+    "curved",
+    "smooth_curve",
+    "loop",
+    "freeform",
+}
+ARROW_PLAN_DIRECTIONS = {
+    "left_to_right",
+    "right_to_left",
+    "top_to_bottom",
+    "bottom_to_top",
+    "bidirectional",
+    "none",
+    "unknown",
+}
 
 
 def exact_mode_from_metadata(metadata: Any) -> bool:
@@ -1626,6 +1668,346 @@ def validate_fidelity_metadata(
             contract_issue(
                 "Exact reconstruction includes caption-like content but metadata.region_plan has no caption crop region."
             )
+
+
+def arrow_plan_items(metadata: dict[str, Any]) -> list[Any] | None:
+    plan = metadata.get("arrow_plan")
+    if plan is None:
+        plan = metadata.get("edge_inventory")
+    if plan is None:
+        inventory = metadata.get("source_visual_inventory")
+        if isinstance(inventory, dict):
+            plan = inventory.get("arrow_plan", inventory.get("edge_inventory"))
+    return plan if isinstance(plan, list) else None
+
+
+def edge_arrow_plan_id(edge: dict[str, Any]) -> str | None:
+    value = edge.get("arrow_plan_id", edge.get("source_arrow_id", edge.get("edge_inventory_id")))
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def node_motif_edges(node: dict[str, Any]) -> list[dict[str, Any]]:
+    value = node.get("motif_edges")
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def edge_endpoint_type(edge: dict[str, Any], endpoint_name: str, node_types_by_id: dict[str, str]) -> str | None:
+    endpoint = edge.get(endpoint_name)
+    if not isinstance(endpoint, str):
+        return None
+    return node_types_by_id.get(base_node_id(endpoint))
+
+
+def endpoint_matches_anchor(endpoint: Any, anchor: Any) -> bool:
+    if not isinstance(endpoint, str) or not isinstance(anchor, str) or not anchor.strip():
+        return True
+    anchor = anchor.strip().lower()
+    if anchor in {"any", "unknown", "unspecified"}:
+        return True
+    if ":" in anchor:
+        return endpoint.lower().endswith(anchor[anchor.index(":") :])
+    side = endpoint_side(endpoint)
+    return bool(side and side.lower() == anchor.split("@", 1)[0])
+
+
+def validate_arrow_plan_contract(
+    scene: dict[str, Any],
+    edges: list[Any],
+    nodes_by_id: dict[str, dict],
+    node_types_by_id: dict[str, str],
+    component_map: dict,
+    profile: dict,
+    warnings: list[str],
+    errors: list[str],
+    strict_contract: bool = False,
+) -> None:
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    exact_mode = exact_mode_from_metadata(metadata)
+    plans = arrow_plan_items(metadata)
+
+    def contract_issue(message: str) -> None:
+        if strict_contract:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    if plans is None:
+        if exact_mode and edges:
+            contract_issue(
+                "Exact reconstruction should include `metadata.arrow_plan` before first scene authoring. "
+                "List every source-visible arrow with intent, endpoints, route_shape, arrowhead, and certainty so later review can check arrow fidelity."
+            )
+        return
+
+    if not isinstance(plans, list):
+        contract_issue("metadata.arrow_plan should be an array of source-visible arrow facts.")
+        return
+
+    plan_ids: set[str] = set()
+    active_plan_ids: set[str] = set()
+    for index, plan in enumerate(plans):
+        if not isinstance(plan, dict):
+            contract_issue(f"metadata.arrow_plan[{index}] should be an object.")
+            continue
+        plan_id = str(plan.get("id", "")).strip()
+        if not plan_id:
+            contract_issue(f"metadata.arrow_plan[{index}] needs an `id` so scene edges and review findings can refer to it.")
+            continue
+        if plan_id in plan_ids:
+            contract_issue(f"metadata.arrow_plan has duplicate id `{plan_id}`.")
+        plan_ids.add(plan_id)
+        certainty = str(plan.get("certainty", "")).lower()
+        status = str(plan.get("status", "")).lower()
+        if certainty not in {"uncertain", "unknown"} and status not in {"optional", "skipped", "not_visible"}:
+            active_plan_ids.add(plan_id)
+        intent = str(plan.get("semantic_intent", plan.get("intent", ""))).lower()
+        if not intent:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` should record semantic_intent, such as data_flow, feedback, boundary_handoff, merge, fork, or loop_update.")
+        elif intent not in ARROW_PLAN_INTENTS:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` has unsupported semantic_intent `{intent}`.")
+        route_shape = str(plan.get("route_shape", plan.get("shape", ""))).lower()
+        if not route_shape:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` should record route_shape, such as straight_horizontal, orthogonal, smooth_curve, or loop.")
+        elif route_shape not in ARROW_PLAN_ROUTE_SHAPES:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` has unsupported route_shape `{route_shape}`.")
+        direction = str(plan.get("direction", "")).lower()
+        if direction and direction not in ARROW_PLAN_DIRECTIONS:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` has unsupported direction `{direction}`.")
+        if not any(plan.get(key) for key in ("from", "source", "source_fact", "source_endpoint")):
+            contract_issue(f"metadata.arrow_plan `{plan_id}` should describe the visible source endpoint.")
+        if not any(plan.get(key) for key in ("to", "target", "target_endpoint")):
+            contract_issue(f"metadata.arrow_plan `{plan_id}` should describe the visible target endpoint.")
+        if strict_contract:
+            for required_key in (
+                "from_visual_object",
+                "from_anchor_description",
+                "to_visual_object",
+                "to_anchor_description",
+                "line_style",
+                "arrowhead",
+                "semantic_intent",
+                "source_bbox_px",
+                "must_not_cross",
+                "relative_position_facts",
+            ):
+                if required_key not in plan:
+                    contract_issue(f"metadata.arrow_plan `{plan_id}` misses strict field `{required_key}`.")
+        if plan.get("must_be_axis_aligned") and route_shape in {"curved", "smooth_curve", "loop", "freeform"}:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` asks for axis alignment but route_shape is `{route_shape}`.")
+        bbox = plan.get("source_bbox_px")
+        if strict_contract and bbox is not None and bbox_signature(bbox) is None:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` has invalid source_bbox_px; expected [left, top, right, bottom].")
+
+    edges_by_plan: dict[str, list[dict[str, Any]]] = {}
+    motif_edges_by_plan: dict[str, list[dict[str, Any]]] = {}
+    unplanned_edges: list[str] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        edge_id = str(edge.get("id", "<unknown>"))
+        plan_id = edge_arrow_plan_id(edge)
+        if plan_id:
+            edges_by_plan.setdefault(plan_id, []).append(edge)
+            if plan_id not in plan_ids:
+                contract_issue(f"Edge `{edge_id}` references unknown arrow_plan_id `{plan_id}`.")
+        elif exact_mode and edge.get("type") not in {"line_segment"}:
+            unplanned_edges.append(edge_id)
+
+    for node_id, node in nodes_by_id.items():
+        for motif_edge in node_motif_edges(node):
+            motif_edge_id = str(motif_edge.get("id", f"{node_id}.motif_edge"))
+            plan_id = edge_arrow_plan_id(motif_edge)
+            if plan_id:
+                motif_edges_by_plan.setdefault(plan_id, []).append(motif_edge)
+                if plan_id not in plan_ids:
+                    contract_issue(f"Node `{node_id}` motif_edge `{motif_edge_id}` references unknown arrow_plan_id `{plan_id}`.")
+            elif exact_mode:
+                contract_issue(f"Node `{node_id}` motif_edge `{motif_edge_id}` has no arrow_plan_id.")
+
+    for plan_id in sorted(active_plan_ids):
+        if plan_id not in edges_by_plan and plan_id not in motif_edges_by_plan:
+            contract_issue(f"metadata.arrow_plan `{plan_id}` has no scene edge or motif_edge with matching `arrow_plan_id`.")
+
+    if exact_mode and plans and unplanned_edges:
+        contract_issue(
+            "Exact reconstruction has visible edges without arrow_plan_id: "
+            f"{', '.join(unplanned_edges[:8])}{' ...' if len(unplanned_edges) > 8 else ''}. "
+            "Bind every source-visible arrow to metadata.arrow_plan so review can check the same topology facts."
+        )
+
+    plan_by_id = {str(plan.get("id", "")).strip(): plan for plan in plans if isinstance(plan, dict)}
+    for plan_id in sorted(set(edges_by_plan) | set(motif_edges_by_plan)):
+        plan_edges = edges_by_plan.get(plan_id, [])
+        motif_plan_edges = motif_edges_by_plan.get(plan_id, [])
+        plan = plan_by_id.get(plan_id)
+        if not plan:
+            continue
+        all_bindings = [*plan_edges, *motif_plan_edges]
+        if len(all_bindings) > 1:
+            segment_count_values = {
+                binding.get("segment_count")
+                for binding in all_bindings
+                if isinstance(binding.get("segment_count"), int)
+            }
+            segment_indexes = [
+                binding.get("segment_index")
+                for binding in all_bindings
+                if isinstance(binding.get("segment_index"), int)
+            ]
+            all_segmented = all(
+                binding.get("same_source_arrow") is True
+                and isinstance(binding.get("segment_index"), int)
+                and isinstance(binding.get("segment_count"), int)
+                for binding in all_bindings
+            )
+            expected_count = len(all_bindings)
+            if not all_segmented or segment_count_values != {expected_count} or sorted(segment_indexes) != list(range(1, expected_count + 1)):
+                contract_issue(
+                    f"metadata.arrow_plan `{plan_id}` is bound to {len(all_bindings)} scene/motif edges. "
+                    "One arrow_plan_id may map to multiple edges only when every edge declares "
+                    "same_source_arrow=true, segment_index, and segment_count with complete 1-based segment coverage."
+                )
+        intent = str(plan.get("semantic_intent", plan.get("intent", ""))).lower()
+        route_shape = str(plan.get("route_shape", plan.get("shape", ""))).lower()
+        from_anchor = plan.get("from_anchor", plan.get("source_anchor"))
+        to_anchor = plan.get("to_anchor", plan.get("target_anchor"))
+        must_axis = bool(plan.get("must_be_axis_aligned")) or route_shape in {
+            "straight_horizontal",
+            "straight_vertical",
+            "horizontal",
+            "vertical",
+            "orthogonal",
+            "elbow",
+            "right_angle",
+            "hv",
+            "vh",
+        }
+
+        for motif_edge in motif_plan_edges:
+            motif_edge_id = str(motif_edge.get("id", "<motif-edge>"))
+            route_shape_value = str(motif_edge.get("route_shape", motif_edge.get("route", ""))).lower()
+            if route_shape and route_shape_value and route_shape_value != route_shape:
+                contract_issue(
+                    f"Arrow plan `{plan_id}` expects route_shape `{route_shape}` but motif_edge `{motif_edge_id}` declares `{route_shape_value}`."
+                )
+            if not motif_edge.get("from") and not motif_edge.get("from_anchor_description"):
+                contract_issue(f"Arrow plan `{plan_id}` motif_edge `{motif_edge_id}` should declare an internal source/from endpoint.")
+            if not motif_edge.get("to") and not motif_edge.get("to_anchor_description"):
+                contract_issue(f"Arrow plan `{plan_id}` motif_edge `{motif_edge_id}` should declare an internal target/to endpoint.")
+
+        for edge in plan_edges:
+            edge_id = str(edge.get("id", "<unknown>"))
+            edge_type = str(edge.get("type", ""))
+            if intent in {"feedback", "loss_backprop"} and edge_type != "dashed_feedback_path":
+                contract_issue(f"Arrow plan `{plan_id}` is `{intent}` but edge `{edge_id}` uses `{edge_type}`; use `dashed_feedback_path`.")
+            if intent in {"boundary_handoff", "frame_output"}:
+                source_type = edge_endpoint_type(edge, "from", node_types_by_id)
+                target_type = edge_endpoint_type(edge, "to", node_types_by_id)
+                if edge_type != "boundary_arrow" and "boundary_port" not in {source_type, target_type}:
+                    contract_issue(
+                        f"Arrow plan `{plan_id}` is `{intent}` but edge `{edge_id}` is not bound to a boundary_port/boundary_arrow."
+                    )
+            if intent in {"merge", "fan_in"}:
+                target_type = edge_endpoint_type(edge, "to", node_types_by_id)
+                if target_type not in {"junction_point", "merge_bus", "multi_port_junction"} and edge_type not in {"join_connector"}:
+                    contract_issue(
+                        f"Arrow plan `{plan_id}` is `{intent}` but edge `{edge_id}` does not terminate at a junction/merge bus."
+                    )
+            if intent in {"fork", "fan_out"}:
+                source_type = edge_endpoint_type(edge, "from", node_types_by_id)
+                if source_type not in {"junction_point", "merge_bus", "multi_port_junction"} and edge_type not in {"fork_connector"}:
+                    contract_issue(
+                        f"Arrow plan `{plan_id}` is `{intent}` but edge `{edge_id}` does not originate from a junction/merge bus."
+                    )
+            if intent == "loop_update" and edge_type != "loop_arrow":
+                contract_issue(f"Arrow plan `{plan_id}` is a loop_update but edge `{edge_id}` uses `{edge_type}`; use one continuous `loop_arrow`.")
+
+            if from_anchor and not endpoint_matches_anchor(edge.get("from"), from_anchor):
+                contract_issue(f"Arrow plan `{plan_id}` expects from_anchor `{from_anchor}` but edge `{edge_id}` uses `{edge.get('from')}`.")
+            if to_anchor and not endpoint_matches_anchor(edge.get("to"), to_anchor):
+                contract_issue(f"Arrow plan `{plan_id}` expects to_anchor `{to_anchor}` but edge `{edge_id}` uses `{edge.get('to')}`.")
+
+            try:
+                style = edge_style(edge, component_map, profile)
+                route_points = edge_route_points(edge, style, nodes_by_id)
+            except Exception as exc:
+                contract_issue(f"Arrow plan `{plan_id}` edge `{edge_id}` route could not be checked: {exc}")
+                continue
+
+            axes = route_axes(route_points)
+            has_diagonal = "diagonal" in axes
+            if must_axis and has_diagonal and not edge.get("allow_diagonal"):
+                contract_issue(
+                    f"Arrow plan `{plan_id}` requires an axis-aligned route but edge `{edge_id}` has diagonal segment(s)."
+                )
+            if route_shape in {"straight_horizontal", "horizontal"} and axes - {"horizontal"}:
+                contract_issue(f"Arrow plan `{plan_id}` expects a horizontal arrow but edge `{edge_id}` has {sorted(axes)} segment(s).")
+            if route_shape in {"straight_vertical", "vertical"} and axes - {"vertical"}:
+                contract_issue(f"Arrow plan `{plan_id}` expects a vertical arrow but edge `{edge_id}` has {sorted(axes)} segment(s).")
+            if route_shape in {"curved", "smooth_curve", "loop"}:
+                if edge_type not in CURVED_EDGE_TYPES:
+                    contract_issue(f"Arrow plan `{plan_id}` expects a curved/loop arrow but edge `{edge_id}` uses `{edge_type}`.")
+                if len(route_points) < 4:
+                    contract_issue(f"Arrow plan `{plan_id}` expects a smooth curve but edge `{edge_id}` has too few route points.")
+                curve_mode = str(edge.get("curve_mode", edge.get("curve", style.get("curve_mode", "")))).lower()
+                if route_shape in {"smooth_curve", "loop"} and curve_mode not in {"smooth", "bezier", "catmull_rom"}:
+                    contract_issue(
+                        f"Arrow plan `{plan_id}` expects a smooth curve but edge `{edge_id}` uses curve_mode `{curve_mode or 'polyline'}`."
+                    )
+
+
+def validate_local_motif_contract(
+    scene: dict[str, Any],
+    nodes_by_id: dict[str, dict],
+    warnings: list[str],
+    errors: list[str],
+    strict_contract: bool = False,
+) -> None:
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    exact_mode = exact_mode_from_metadata(metadata)
+    if not exact_mode:
+        return
+
+    def contract_issue(message: str) -> None:
+        if strict_contract:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    local_motifs = metadata.get("local_motifs")
+    if local_motifs is not None and not isinstance(local_motifs, list):
+        contract_issue("metadata.local_motifs should be an array of local motif grammar contracts.")
+    if isinstance(local_motifs, list):
+        for index, motif in enumerate(local_motifs):
+            if not isinstance(motif, dict):
+                contract_issue(f"metadata.local_motifs[{index}] should be an object.")
+                continue
+            motif_id = str(motif.get("id", motif.get("name", f"motif_{index}"))).strip()
+            motif_type = str(motif.get("motif_type", motif.get("type", ""))).strip()
+            if not motif_type:
+                contract_issue(f"metadata.local_motifs `{motif_id}` should declare motif_type.")
+            if not motif.get("source_bbox_px"):
+                contract_issue(f"metadata.local_motifs `{motif_id}` should record source_bbox_px for local crop review.")
+            if motif_type == "attention_score_motif" and not motif.get("required_arrow_plan_ids"):
+                contract_issue(f"metadata.local_motifs `{motif_id}` should list required_arrow_plan_ids for Q/K-score/value connectors.")
+
+    for node_id, node in nodes_by_id.items():
+        node_type = str(node.get("type", ""))
+        if not node_type.endswith("_motif"):
+            continue
+        motif_edges = node_motif_edges(node)
+        if node_type == "attention_score_motif" and not motif_edges:
+            contract_issue(
+                f"Motif node `{node_id}` is attention_score_motif but has no motif_edges; expose internal operator/grid connectors with arrow_plan_id."
+            )
+        for motif_edge in motif_edges:
+            motif_edge_id = str(motif_edge.get("id", f"{node_id}.motif_edge"))
+            if not edge_arrow_plan_id(motif_edge):
+                contract_issue(f"Motif node `{node_id}` motif_edge `{motif_edge_id}` is missing arrow_plan_id.")
 
 
 NON_RENDERED_OR_TINY_TYPES = {
@@ -3653,6 +4035,25 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     "GAN/TFR backprop arrows contain three or more parallel dashed vertical paths into the discriminator. "
                     "Use a shared `merge_bus`/`junction_point` with `bundle_id` and controlled spacing so the bottom loss system reads as one clean feedback bus."
                 )
+
+    validate_arrow_plan_contract(
+        scene,
+        edges,
+        nodes_by_id,
+        node_types_by_id,
+        component_map,
+        profile,
+        warnings,
+        errors,
+        strict_contract=strict,
+    )
+    validate_local_motif_contract(
+        scene,
+        nodes_by_id,
+        warnings,
+        errors,
+        strict_contract=strict,
+    )
 
     for endpoint, edge_list in incoming_by_endpoint.items():
         node_type = node_types_by_id.get(base_node_id(endpoint))

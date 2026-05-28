@@ -20,6 +20,7 @@ from scene_validate import (
     CONTAINER_TYPES,
     STRICT_REPLICA_REVIEW_MODES,
     STRICT_REQUIRED_REGION_CATEGORIES,
+    arrow_plan_items,
     base_node_id,
     bbox_signature,
     container_for_point,
@@ -29,6 +30,7 @@ from scene_validate import (
     edge_endpoint_role,
     exact_mode_from_metadata,
     endpoint_side,
+    edge_arrow_plan_id,
     expanded_box,
     infer_containers,
     is_background_node,
@@ -37,6 +39,7 @@ from scene_validate import (
     loss_feedback_stub_issue,
     node_box,
     node_center,
+    node_motif_edges,
     node_text_for_font,
     path_bounds,
     point_in_box,
@@ -372,6 +375,121 @@ def strict_replica_workflow_items(metadata: dict[str, Any]) -> list[str]:
     return items
 
 
+def arrow_plan_audit_items(metadata: dict[str, Any], edges: list[dict[str, Any]], nodes: list[dict[str, Any]]) -> list[str]:
+    items: list[str] = []
+    if not exact_mode_from_metadata(metadata):
+        return items
+
+    plans = arrow_plan_items(metadata)
+    if not isinstance(plans, list) or not plans:
+        return [
+            "- [ ] [REBUILD] Exact figure has no usable `metadata.arrow_plan`; inventory every source-visible arrow before authoring scene edges."
+        ]
+
+    plan_by_id: dict[str, dict[str, Any]] = {}
+    active_plan_ids: set[str] = set()
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        plan_id = str(plan.get("id", "")).strip()
+        if not plan_id:
+            continue
+        plan_by_id[plan_id] = plan
+        certainty = str(plan.get("certainty", "")).lower()
+        status = str(plan.get("status", "")).lower()
+        if certainty not in {"uncertain", "unknown"} and status not in {"optional", "skipped", "not_visible"}:
+            active_plan_ids.add(plan_id)
+
+    edges_by_plan: dict[str, list[dict[str, Any]]] = {}
+    motif_edges_by_plan: dict[str, list[dict[str, Any]]] = {}
+    unplanned_edges: list[str] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        edge_id = str(edge.get("id", "<missing-id>"))
+        plan_id = edge_arrow_plan_id(edge)
+        if plan_id:
+            edges_by_plan.setdefault(plan_id, []).append(edge)
+        elif edge.get("type") not in {"line_segment"}:
+            unplanned_edges.append(edge_id)
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id", "<missing-node>"))
+        for motif_edge in node_motif_edges(node):
+            motif_edge_id = str(motif_edge.get("id", f"{node_id}.motif_edge"))
+            plan_id = edge_arrow_plan_id(motif_edge)
+            if plan_id:
+                motif_edges_by_plan.setdefault(plan_id, []).append(motif_edge)
+            else:
+                unplanned_edges.append(f"{node_id}.{motif_edge_id}")
+
+    covered_plan_ids = set(edges_by_plan) | set(motif_edges_by_plan)
+    missing_edges = sorted(active_plan_ids - covered_plan_ids)
+    unknown_refs = sorted(covered_plan_ids - set(plan_by_id))
+    if missing_edges:
+        items.append(
+            f"- [ ] [REBUILD] arrow_plan_coverage: active source arrows with no scene edge: `{', '.join(missing_edges[:12])}`."
+        )
+    if unknown_refs:
+        items.append(
+            f"- [ ] [REBUILD] unbound_source_arrows: scene edges reference unknown arrow_plan ids `{', '.join(unknown_refs[:12])}`."
+        )
+    if unplanned_edges:
+        items.append(
+            f"- [ ] [REBUILD] arrow_plan_coverage: visible scene edges without arrow_plan_id: `{', '.join(unplanned_edges[:12])}`."
+        )
+
+    for plan_id in sorted(covered_plan_ids):
+        plan_edges = edges_by_plan.get(plan_id, [])
+        all_bindings = [*plan_edges, *motif_edges_by_plan.get(plan_id, [])]
+        if len(all_bindings) <= 1:
+            continue
+        segment_count_values = {
+            binding.get("segment_count")
+            for binding in all_bindings
+            if isinstance(binding.get("segment_count"), int)
+        }
+        segment_indexes = [
+            binding.get("segment_index")
+            for binding in all_bindings
+            if isinstance(binding.get("segment_index"), int)
+        ]
+        expected_count = len(all_bindings)
+        all_segmented = all(
+            binding.get("same_source_arrow") is True
+            and isinstance(binding.get("segment_index"), int)
+            and isinstance(binding.get("segment_count"), int)
+            for binding in all_bindings
+        )
+        if not all_segmented or segment_count_values != {expected_count} or sorted(segment_indexes) != list(range(1, expected_count + 1)):
+            items.append(
+                f"- [ ] [REBUILD] multi_edge_plan_misuse: arrow_plan `{plan_id}` binds {len(all_bindings)} scene/motif edges without complete same_source_arrow segment metadata."
+            )
+
+    strict_fields = (
+        "from_visual_object",
+        "from_anchor_description",
+        "to_visual_object",
+        "to_anchor_description",
+        "line_style",
+        "arrowhead",
+        "semantic_intent",
+        "source_bbox_px",
+        "must_not_cross",
+        "relative_position_facts",
+    )
+    for plan_id, plan in sorted(plan_by_id.items()):
+        missing = [field for field in strict_fields if field not in plan]
+        if missing:
+            items.append(
+                f"- [ ] [REBUILD] source_anchor_mismatch risk: arrow_plan `{plan_id}` misses strict fields `{', '.join(missing[:6])}{' ...' if len(missing) > 6 else ''}`."
+            )
+
+    return items
+
+
 def looks_like_vector_formula(text: str) -> bool:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if any(char in text for char in "⎡⎢⎣⎤⎥⎦"):
@@ -434,6 +552,7 @@ def audit_scene(scene: dict[str, Any]) -> str:
     exact_mode = exact_mode_from_metadata(metadata)
     audit_items.extend(strict_replica_workflow_items(metadata))
     audit_items.extend(metadata_region_plan_items(metadata, nodes))
+    audit_items.extend(arrow_plan_audit_items(metadata, edges, nodes))
     rebuild_items.extend(source_visual_inventory_items(metadata, nodes))
 
     for edge in edges:

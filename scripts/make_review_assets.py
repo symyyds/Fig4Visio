@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
-from scene_validate import STRICT_REQUIRED_REGION_CATEGORIES, exact_mode_from_metadata, region_categories
+from scene_validate import STRICT_REQUIRED_REGION_CATEGORIES, arrow_plan_items, exact_mode_from_metadata, region_categories
 
 
 def load_font(size: int) -> ImageFont.ImageFont:
@@ -205,11 +205,64 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def arrow_plan_topology_checklist(scene: dict[str, object] | None) -> list[dict[str, object]]:
+    if not isinstance(scene, dict):
+        return []
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    plans = arrow_plan_items(metadata)
+    if not isinstance(plans, list):
+        return []
+    items: list[dict[str, object]] = []
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        plan_id = str(plan.get("id", "")).strip()
+        if not plan_id:
+            continue
+        status = str(plan.get("status", "")).lower()
+        certainty = str(plan.get("certainty", "certain")).lower()
+        if status in {"optional", "skipped", "not_visible"} or certainty in {"uncertain", "unknown"}:
+            default_status = "uncertain"
+        else:
+            default_status = "uncertain"
+        source_fact = str(plan.get("source_fact", "")).strip()
+        if not source_fact:
+            source = plan.get("from_visual_object", plan.get("from", plan.get("source", "source")))
+            target = plan.get("to_visual_object", plan.get("to", plan.get("target", "target")))
+            route = plan.get("route_shape", "route")
+            arrowhead = plan.get("arrowhead", "arrowhead")
+            source_fact = f"{plan_id}: {source} -> {target}, route={route}, arrowhead={arrowhead}"
+        focus_region = str(plan.get("source_region", plan.get("focus_region", plan.get("region", "arrow_dense")))).strip() or "arrow_dense"
+        items.append(
+            {
+                "id": plan_id,
+                "kind": "arrow_plan",
+                "arrow_plan_id": plan_id,
+                "focus_region": focus_region,
+                "source_fact": source_fact,
+                "expected_from": plan.get("from_visual_object", plan.get("from")),
+                "expected_from_anchor": plan.get("from_anchor_description", plan.get("from_anchor")),
+                "expected_to": plan.get("to_visual_object", plan.get("to")),
+                "expected_to_anchor": plan.get("to_anchor_description", plan.get("to_anchor")),
+                "expected_route_shape": plan.get("route_shape"),
+                "expected_line_style": plan.get("line_style"),
+                "expected_arrowhead": plan.get("arrowhead"),
+                "semantic_intent": plan.get("semantic_intent"),
+                "source_bbox_px": plan.get("source_bbox_px"),
+                "status": default_status,
+                "certainty": certainty if certainty in {"certain", "inferred", "uncertain"} else "certain",
+                "replica_status": "not_reviewed",
+            }
+        )
+    return items
+
+
 def review_bundle_payload(
     *,
     figure_id: str,
     round_index: int,
     scene_path: str | None,
+    scene: dict[str, object] | None,
     original_path: str,
     replica_path: str,
     pair_paths: list[str],
@@ -225,6 +278,7 @@ def review_bundle_payload(
         }
         for name, categories, source_box, target_box in regions
     ]
+    topology_checklist = arrow_plan_topology_checklist(scene)
     manifest = {
         "schema_version": "0.1",
         "figure_id": figure_id,
@@ -239,6 +293,7 @@ def review_bundle_payload(
         "debug_pair_paths": pair_paths,
         "debug_overlay_paths": overlay_paths,
         "regions": region_rows,
+        "arrow_plan_checklist": topology_checklist,
         "debug_asset_policy": {
             "global_pair": "off_by_default; generate only with --include-global-pair for human navigation or audit records",
             "crops": "targeted_only; generate named crops with --crops or scene regions with --region-crops all",
@@ -278,6 +333,8 @@ def review_bundle_payload(
             "replica_path": replica_path,
         },
         "findings": [],
+        "topology_checklist": topology_checklist,
+        "visual_checklist": [],
     }
     rebuild_template = {
         "schema_version": "0.1",
@@ -295,6 +352,7 @@ def review_bundle_payload(
             "replica_path": replica_path,
         },
         "findings_digest": [],
+        "arrow_plan_repair_targets": [],
     }
     return manifest, findings_template, rebuild_template
 
@@ -432,6 +490,7 @@ def main() -> int:
             figure_id=args.id,
             round_index=args.round,
             scene_path=str(Path(args.scene).resolve()) if args.scene else None,
+            scene=scene,
             original_path=str(Path(args.original).resolve()),
             replica_path=str(Path(args.replica).resolve()),
             pair_paths=pair_paths,
