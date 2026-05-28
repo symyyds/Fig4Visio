@@ -136,6 +136,8 @@ The checklist fields are the reviewer's source-derived acceptance criteria:
 - Findings should cite failed checklist ids through `checklist_refs` when possible.
 - A review may include passing checklist items. They help later rounds avoid regressing details that already match.
 
+When the scene includes `metadata.arrow_plan`, the topology checklist should reference those arrow ids whenever possible. For example, report `A003 fails: source is a horizontal boundary-to-module arrow, replica lands on the module center and becomes diagonal`. Do not collapse several arrow defects into one broad note such as "arrows are wrong"; the rebuild brief needs per-arrow evidence.
+
 Required fields:
 
 - `id`

@@ -32,12 +32,14 @@ flowchart TD
 flowchart LR
   A["Source image"] --> B["Identify visible modules"]
   A --> C["Identify logical modules"]
+  A --> C2["Arrow inventory<br/>who connects to what, route shape, endpoints"]
   B --> D["group_container"]
   C --> E["audit_region"]
   D --> F["Place child nodes"]
   E --> F
-  F --> G["Add explicit ports and junctions"]
-  G --> H["Add edges with route/points"]
+  C2 --> G["Add explicit ports and junctions"]
+  F --> G
+  G --> H["Add edges with route/points<br/>bind arrow_plan_id"]
   H --> I["Validate, complexity check, and audit"]
   I --> J{"Issues?"}
   J -- "Yes" --> F
@@ -47,6 +49,8 @@ flowchart LR
 Use `group_container` when the source has a visible module boundary. Use `audit_region` when the source has no visible boundary but the figure still needs local review, such as a residual block, classifier head, attention module, or feature extraction lane.
 
 `image_to_scene.py` is not a vision parser. It only creates a starter scene shell. The real first-pass scene must still be authored by the LLM from the source image.
+
+For strict replicas, arrow topology is locked before the first render. The visual analysis step should write `metadata.arrow_plan` with one entry per source-visible arrow: source endpoint, target endpoint, `semantic_intent`, `route_shape`, line style, arrowhead, and certainty. Scene edges then reference those facts with `arrow_plan_id`. `scene_validate.py --strict` fails missing plan entries, unbound visible edges, wrong route shapes, diagonal drift on axis-locked arrows, fragmented feedback paths, and loop arrows that are not represented as one continuous `loop_arrow`.
 
 ## Generation-First Loop
 

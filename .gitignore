@@ -21,6 +21,7 @@ work/
 tmp*/
 regressions/
 eval_rounds/
+docs/assets/promo/
 *.vsdx
 *.vdx
 *.audit.md
@@ -30,6 +31,8 @@ eval_rounds/
 *_scene_rebuild_brief.json
 *_noop_gate.json
 *.autofixed.scene.json
+
+scripts/make_promo_poster.py
 
 .DS_Store
 Thumbs.db

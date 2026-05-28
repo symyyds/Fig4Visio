@@ -141,3 +141,116 @@ def test_review_bundle_and_checklist_gate(tmp_path: Path) -> None:
         "--require-failed-refs",
     )
     assert gate.returncode == 0, gate.stdout + gate.stderr
+
+
+def test_arrow_plan_gate_accepts_bound_horizontal_arrow(tmp_path: Path) -> None:
+    scene = tmp_path / "arrow_plan_ok.scene.json"
+    scene.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "metadata": {
+                    "arrow_plan": [
+                        {
+                            "id": "A001",
+                            "from": "left box right boundary",
+                            "from_visual_object": "left box",
+                            "to": "right box left boundary",
+                            "to_visual_object": "right box",
+                            "from_anchor": "right@0.50",
+                            "from_anchor_description": "right edge midpoint",
+                            "to_anchor": "left@0.50",
+                            "to_anchor_description": "left edge midpoint",
+                            "semantic_intent": "data_flow",
+                            "route_shape": "straight_horizontal",
+                            "line_style": "solid",
+                            "direction": "left_to_right",
+                            "arrowhead": "end",
+                            "must_be_axis_aligned": True,
+                            "source_bbox_px": [100, 100, 260, 120],
+                            "must_not_cross": ["a", "b"],
+                            "relative_position_facts": ["left box is left of right box", "arrow is horizontal"],
+                            "certainty": "certain",
+                        }
+                    ]
+                },
+                "page": {"width": 8, "height": 4.5, "units": "in"},
+                "nodes": [
+                    {"id": "a", "type": "rounded_process", "x": 1, "y": 2, "w": 1, "h": 0.5, "text": "A"},
+                    {"id": "b", "type": "rounded_process", "x": 4, "y": 2, "w": 1, "h": 0.5, "text": "B"},
+                ],
+                "edges": [
+                    {
+                        "id": "a_to_b",
+                        "type": "lane_arrow",
+                        "arrow_plan_id": "A001",
+                        "from": "a:right@0.50",
+                        "to": "b:left@0.50",
+                        "route": "horizontal",
+                    }
+                ],
+                "assets": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_script("scene_validate.py", str(scene), "--strict")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_arrow_plan_gate_rejects_diagonal_horizontal_arrow(tmp_path: Path) -> None:
+    scene = tmp_path / "arrow_plan_bad.scene.json"
+    scene.write_text(
+        json.dumps(
+            {
+                "version": "0.1",
+                "metadata": {
+                    "arrow_plan": [
+                        {
+                            "id": "A001",
+                            "from": "left box right boundary",
+                            "from_visual_object": "left box",
+                            "to": "right box left boundary",
+                            "to_visual_object": "right box",
+                            "from_anchor_description": "right edge midpoint",
+                            "to_anchor_description": "left edge midpoint",
+                            "semantic_intent": "data_flow",
+                            "route_shape": "straight_horizontal",
+                            "line_style": "solid",
+                            "direction": "left_to_right",
+                            "arrowhead": "end",
+                            "must_be_axis_aligned": True,
+                            "source_bbox_px": [100, 100, 260, 120],
+                            "must_not_cross": ["a", "b"],
+                            "relative_position_facts": ["left box is left of right box", "arrow is horizontal"],
+                            "certainty": "certain",
+                        }
+                    ]
+                },
+                "page": {"width": 8, "height": 4.5, "units": "in"},
+                "nodes": [
+                    {"id": "a", "type": "rounded_process", "x": 1, "y": 1, "w": 1, "h": 0.5, "text": "A"},
+                    {"id": "b", "type": "rounded_process", "x": 4, "y": 2, "w": 1, "h": 0.5, "text": "B"},
+                ],
+                "edges": [
+                    {
+                        "id": "a_to_b",
+                        "type": "lane_arrow",
+                        "arrow_plan_id": "A001",
+                        "from": "a:right@0.50",
+                        "to": "b:left@0.50",
+                        "route": "straight",
+                    }
+                ],
+                "assets": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_script("scene_validate.py", str(scene), "--strict")
+    assert result.returncode != 0
+    assert "expects a horizontal arrow" in (result.stdout + result.stderr)

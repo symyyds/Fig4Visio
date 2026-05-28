@@ -63,6 +63,10 @@
     "common_edge_effective_fields": [
       "from",
       "to",
+      "arrow_plan_id",
+      "source_arrow_id",
+      "semantic_intent",
+      "route_shape",
       "from_point",
       "to_point",
       "points",
