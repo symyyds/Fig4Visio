@@ -9,6 +9,9 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from scene_to_visio import edge_route_points, edge_style, load_component_map, normalize_scene_coordinates, rounded_orthogonal_points  # noqa: E402
 
 
 def run_script(script: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -42,6 +45,92 @@ def test_public_release_files_are_present() -> None:
 
 def test_basic_scene_validates() -> None:
     result = run_script("scene_validate.py", str(ROOT / "templates" / "examples" / "basic_flow.scene.json"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Scene is valid" in result.stdout
+
+
+def test_rounded_orthogonal_points_rounds_only_the_corner() -> None:
+    points = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]
+    rounded = rounded_orthogonal_points(points, corner_radius=0.5, samples_per_corner=4)
+
+    assert rounded[0] == points[0]
+    assert rounded[-1] == points[-1]
+    assert (2.0, 0.0) not in rounded
+    assert any(abs(x - 1.5) < 1e-9 and abs(y - 0.0) < 1e-9 for x, y in rounded)
+    assert any(abs(x - 2.0) < 1e-9 and abs(y - 0.5) < 1e-9 for x, y in rounded)
+    assert all(
+        0.0 <= x <= 2.0 and 0.0 <= y <= 2.0
+        for x, y in rounded
+    )
+
+
+def test_pixel_corner_radius_is_scaled_to_inches() -> None:
+    scene = {
+        "version": "0.1",
+        "page": {"width": 1000, "height": 500, "units": "px", "target_width_in": 10},
+        "nodes": [
+            {"id": "a", "type": "rounded_process", "x": 100, "y": 100, "w": 100, "h": 50, "text": "A"},
+            {"id": "b", "type": "rounded_process", "x": 800, "y": 300, "w": 100, "h": 50, "text": "B"},
+        ],
+        "edges": [
+            {
+                "id": "a_to_b",
+                "type": "rounded_orthogonal_connector",
+                "from": "a:right@0.50",
+                "points": [[400, 125], [400, 325]],
+                "to": "b:left@0.50",
+                "route": "rounded_orthogonal",
+                "corner_radius_px": 12,
+            }
+        ],
+        "assets": [],
+    }
+
+    normalized = normalize_scene_coordinates(scene)
+    edge = normalized["edges"][0]
+    assert edge["corner_radius_in"] == 0.12
+
+
+def test_rounded_orthogonal_connector_validates_and_routes() -> None:
+    scene = {
+        "version": "0.1",
+        "page": {"width": 8, "height": 4.5, "units": "in"},
+        "nodes": [
+            {"id": "a", "type": "rounded_process", "x": 1, "y": 1, "w": 1, "h": 0.5, "text": "A"},
+            {"id": "b", "type": "rounded_process", "x": 5, "y": 2, "w": 1, "h": 0.5, "text": "B"},
+        ],
+        "edges": [
+            {
+                "id": "a_to_b",
+                "type": "rounded_orthogonal_connector",
+                "from": "a:right@0.50",
+                "points": [[3, 1.25], [3, 2.25]],
+                "to": "b:left@0.50",
+                "route": "rounded_orthogonal",
+                "corner_radius_in": 0.12,
+            }
+        ],
+        "assets": [],
+    }
+    scene_path = Path.cwd() / "__tmp_rounded_orthogonal.scene.json"
+    scene_path.write_text(json.dumps(scene), encoding="utf-8")
+    try:
+        result = run_script("scene_validate.py", str(scene_path))
+        assert result.returncode == 0, result.stdout + result.stderr
+    finally:
+        scene_path.unlink(missing_ok=True)
+
+    component_map = load_component_map()
+    edge = scene["edges"][0]
+    style = edge_style(edge, component_map, {})
+    nodes = {node["id"]: node for node in scene["nodes"]}
+    route = edge_route_points(edge, style, nodes)
+    assert route == [(2.0, 1.25), (3.0, 1.25), (3.0, 2.25), (5.0, 2.25)]
+
+
+def test_rounded_orthogonal_example_passes_strict_contract() -> None:
+    example = ROOT / "templates" / "examples" / "rounded_orthogonal_connector.scene.json"
+    result = run_script("scene_validate.py", str(example), "--strict")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Scene is valid" in result.stdout
 

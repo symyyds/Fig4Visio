@@ -306,6 +306,8 @@ def normalize_scene_coordinates(scene: dict[str, Any]) -> dict[str, Any]:
 
     for edge in normalized.get("edges", []):
         scale_in_fields_recursive(edge, sx, sy)
+        if isinstance(edge.get("corner_radius_px"), (int, float)):
+            edge["corner_radius_in"] = float(edge["corner_radius_px"]) * min(sx, sy)
         for key in ("from_point", "to_point", "start_tangent_point", "end_tangent_point"):
             if key in edge:
                 edge[key] = scale_point(edge[key], sx, sy)
@@ -1241,6 +1243,76 @@ def catmull_rom_points(points: list[tuple[float, float]], samples_per_segment: i
             )
             smoothed.append((x, y))
     return smoothed
+
+
+def rounded_orthogonal_points(
+    points: list[tuple[float, float]],
+    corner_radius: float,
+    samples_per_corner: int = 5,
+) -> list[tuple[float, float]]:
+    if len(points) < 3 or corner_radius <= 0:
+        return points
+
+    def unit_vector(start: tuple[float, float], end: tuple[float, float]) -> tuple[float, float] | None:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        return dx / length, dy / length
+
+    def append_unique(target: list[tuple[float, float]], point: tuple[float, float]) -> None:
+        if target and math.hypot(target[-1][0] - point[0], target[-1][1] - point[1]) <= 1e-9:
+            return
+        target.append(point)
+
+    rounded: list[tuple[float, float]] = [points[0]]
+    for index in range(1, len(points) - 1):
+        prev_point = points[index - 1]
+        corner = points[index]
+        next_point = points[index + 1]
+        in_dir = unit_vector(prev_point, corner)
+        out_dir = unit_vector(corner, next_point)
+        if in_dir is None or out_dir is None:
+            append_unique(rounded, corner)
+            continue
+
+        dot = in_dir[0] * out_dir[0] + in_dir[1] * out_dir[1]
+        cross = in_dir[0] * out_dir[1] - in_dir[1] * out_dir[0]
+        incoming_axis = abs(in_dir[0]) <= 1e-6 or abs(in_dir[1]) <= 1e-6
+        outgoing_axis = abs(out_dir[0]) <= 1e-6 or abs(out_dir[1]) <= 1e-6
+        is_right_angle = incoming_axis and outgoing_axis and abs(dot) <= 1e-6 and abs(cross) > 1e-6
+        if not is_right_angle:
+            append_unique(rounded, corner)
+            continue
+
+        incoming_len = math.hypot(corner[0] - prev_point[0], corner[1] - prev_point[1])
+        outgoing_len = math.hypot(next_point[0] - corner[0], next_point[1] - corner[1])
+        radius = min(corner_radius, incoming_len / 2.0, outgoing_len / 2.0)
+        if radius <= 1e-9:
+            append_unique(rounded, corner)
+            continue
+
+        entry = (corner[0] - in_dir[0] * radius, corner[1] - in_dir[1] * radius)
+        exit_point = (corner[0] + out_dir[0] * radius, corner[1] + out_dir[1] * radius)
+        center = (corner[0] - in_dir[0] * radius + out_dir[0] * radius, corner[1] - in_dir[1] * radius + out_dir[1] * radius)
+        append_unique(rounded, entry)
+
+        start_angle = math.atan2(entry[1] - center[1], entry[0] - center[0])
+        end_angle = math.atan2(exit_point[1] - center[1], exit_point[0] - center[0])
+        if cross > 0 and end_angle <= start_angle:
+            end_angle += math.tau
+        elif cross < 0 and end_angle >= start_angle:
+            end_angle -= math.tau
+
+        steps = max(2, int(samples_per_corner))
+        for step in range(1, steps + 1):
+            t = step / steps
+            angle = start_angle + (end_angle - start_angle) * t
+            append_unique(rounded, (center[0] + math.cos(angle) * radius, center[1] + math.sin(angle) * radius))
+
+    append_unique(rounded, points[-1])
+    return rounded
 
 
 def draw_polygon_from_points(page: Any, page_height: float, points: list[tuple[float, float]]) -> Any:
@@ -5638,7 +5710,7 @@ def edge_route_points(
         force_axis = str(edge.get("force_axis", style.get("force_axis", ""))).lower()
         if force_axis not in {"horizontal", "vertical"}:
             force_axis = None
-        if edge.get("orthogonalize_points") or route_name in {"orthogonal", "elbow", "right_angle", "hv", "vh", "horizontal_then_vertical", "vertical_then_horizontal"}:
+        if edge.get("orthogonalize_points") or route_name in {"orthogonal", "elbow", "right_angle", "rounded_orthogonal", "hv", "vh", "horizontal_then_vertical", "vertical_then_horizontal"}:
             if route_name in {"vh", "vertical_then_horizontal"}:
                 force_axis = "vertical"
             elif route_name in {"hv", "horizontal_then_vertical"}:
@@ -5661,7 +5733,7 @@ def edge_route_points(
     axis = opposite_axis(from_side, to_side)
     snap_tolerance = float(edge.get("snap_tolerance_in", style.get("snap_tolerance_in", 0.18)))
 
-    if route in {"orthogonal", "elbow", "right_angle"}:
+    if route in {"orthogonal", "elbow", "right_angle", "rounded_orthogonal"}:
         return snap_axis_segments(orthogonal_points(start, end, axis), axis_snap)
 
     if axis == "horizontal" and abs(start[1] - end[1]) <= snap_tolerance:
@@ -5714,6 +5786,10 @@ def draw_single_path(
     if curve_mode in {"smooth", "spline"}:
         samples = int(style.get("smooth_samples", style.get("samples_per_segment", 10)) or 10)
         render_points = catmull_rom_points(points, max(3, samples))
+    elif curve_mode in {"rounded_orthogonal", "rounded_orthogonal_arc", "orthogonal_round"}:
+        radius = float(style.get("corner_radius_in", style.get("corner_radius", 0.08)) or 0.0)
+        samples = int(style.get("corner_samples", style.get("samples_per_corner", 5)) or 5)
+        render_points = rounded_orthogonal_points(points, radius, samples)
 
     values: list[float] = []
     for x, y in render_points:
@@ -5756,9 +5832,16 @@ def draw_edge(
     profile: dict[str, Any],
 ) -> tuple[Any, float, float]:
     style = edge_style(edge, component_map, profile)
+    for key in ("corner_radius_in", "corner_radius", "corner_samples", "samples_per_corner"):
+        if edge.get(key) is not None:
+            style[key] = edge[key]
     definition = component_map["edge_types"][edge["type"]]
     points = edge_route_points(edge, style, nodes_by_id)
     renderer = definition.get("renderer", "straight_line")
+    if renderer == "rounded_orthogonal_path":
+        shape = draw_single_path(page, page_height, points, style, "rounded_orthogonal")
+        mid_x, mid_y = point_along_polyline(points, 0.5)
+        return shape, mid_x, mid_y
     if renderer in {"single_path", "curved_path"}:
         curve_mode = str(edge.get("curve_mode", edge.get("curve", style.get("curve_mode", "polyline")))).lower()
         if renderer == "single_path" and curve_mode in {"auto", ""}:

@@ -102,6 +102,7 @@ ARROW_PLAN_ROUTE_SHAPES = {
     "orthogonal",
     "elbow",
     "right_angle",
+    "rounded_orthogonal",
     "hv",
     "vh",
     "curved",
@@ -1771,7 +1772,7 @@ def validate_arrow_plan_contract(
             contract_issue(f"metadata.arrow_plan `{plan_id}` has unsupported semantic_intent `{intent}`.")
         route_shape = str(plan.get("route_shape", plan.get("shape", ""))).lower()
         if not route_shape:
-            contract_issue(f"metadata.arrow_plan `{plan_id}` should record route_shape, such as straight_horizontal, orthogonal, smooth_curve, or loop.")
+            contract_issue(f"metadata.arrow_plan `{plan_id}` should record route_shape, such as straight_horizontal, orthogonal, rounded_orthogonal, smooth_curve, or loop.")
         elif route_shape not in ARROW_PLAN_ROUTE_SHAPES:
             contract_issue(f"metadata.arrow_plan `{plan_id}` has unsupported route_shape `{route_shape}`.")
         direction = str(plan.get("direction", "")).lower()
@@ -1883,6 +1884,7 @@ def validate_arrow_plan_contract(
             "orthogonal",
             "elbow",
             "right_angle",
+            "rounded_orthogonal",
             "hv",
             "vh",
         }
@@ -1958,6 +1960,24 @@ def validate_arrow_plan_contract(
                     contract_issue(
                         f"Arrow plan `{plan_id}` expects a smooth curve but edge `{edge_id}` uses curve_mode `{curve_mode or 'polyline'}`."
                     )
+            if route_shape == "rounded_orthogonal":
+                route_name = str(edge.get("route", edge.get("style", {}).get("route", style.get("route", "")))).lower()
+                if edge_type != "rounded_orthogonal_connector" and route_name != "rounded_orthogonal":
+                    contract_issue(
+                        f"Arrow plan `{plan_id}` expects a rounded orthogonal connector but edge `{edge_id}` uses `{edge_type}` with route `{route_name or 'auto'}`."
+                    )
+                if len(route_points) < 3:
+                    contract_issue(f"Arrow plan `{plan_id}` expects a rounded orthogonal bend but edge `{edge_id}` has fewer than three route points.")
+                edge_style_payload = edge.get("style", {}) if isinstance(edge.get("style"), dict) else {}
+                radius = edge.get(
+                    "corner_radius_in",
+                    edge.get(
+                        "corner_radius_px",
+                        edge_style_payload.get("corner_radius_in", edge_style_payload.get("corner_radius_px")),
+                    ),
+                )
+                if radius is None:
+                    contract_issue(f"Arrow plan `{plan_id}` expects rounded corners but edge `{edge_id}` does not set corner_radius_in/corner_radius_px.")
 
 
 def validate_local_motif_contract(
@@ -3622,6 +3642,7 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             "orthogonal",
             "elbow",
             "right_angle",
+            "rounded_orthogonal",
             "horizontal",
             "vertical",
             "hline",
@@ -3693,6 +3714,7 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                 "orthogonal",
                 "elbow",
                 "right_angle",
+                "rounded_orthogonal",
                 "horizontal",
                 "vertical",
                 "hline",
@@ -3736,6 +3758,29 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
                     warnings.append(f"Lane arrow `{edge_id}` is declared horizontal but has {sorted(axes)} segment(s).")
                 if lane_axis == "vertical" and axes - {"vertical"}:
                     warnings.append(f"Lane arrow `{edge_id}` is declared vertical but has {sorted(axes)} segment(s).")
+
+            if edge_type == "rounded_orthogonal_connector":
+                if "diagonal" in axes:
+                    warnings.append(
+                        f"Rounded orthogonal connector `{edge_id}` contains diagonal segment(s). "
+                        "Provide axis-aligned points or set `orthogonalize_points: true`; rounded corners should not be produced by smoothing a diagonal path."
+                    )
+                if len(route_points) < 3:
+                    warnings.append(
+                        f"Rounded orthogonal connector `{edge_id}` has fewer than three route points; use it for 90-degree bends, not a plain straight lane."
+                    )
+                edge_style_payload = edge.get("style", {}) if isinstance(edge.get("style"), dict) else {}
+                radius = edge.get(
+                    "corner_radius_in",
+                    edge.get(
+                        "corner_radius_px",
+                        edge_style_payload.get("corner_radius_in", edge_style_payload.get("corner_radius_px")),
+                    ),
+                )
+                if radius is None:
+                    warnings.append(
+                        f"Rounded orthogonal connector `{edge_id}` should set `corner_radius_in` or `corner_radius_px` so corner rounding is intentional."
+                    )
 
             if diagonal_segments and edge.get("allow_diagonal") and edge_type in {"arrow_connector", "dynamic_connector"}:
                 source_text = str(source or source_point or "")

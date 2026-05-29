@@ -185,7 +185,7 @@ Supported `semantic_intent` values are:
 - `loop_update`
 - `annotation`, `callout`
 
-Supported `route_shape` values are `straight`, `straight_horizontal`, `straight_vertical`, `horizontal`, `vertical`, `diagonal`, `short_diagonal`, `orthogonal`, `elbow`, `right_angle`, `hv`, `vh`, `curved`, `smooth_curve`, `loop`, and `freeform`.
+Supported `route_shape` values are `straight`, `straight_horizontal`, `straight_vertical`, `horizontal`, `vertical`, `diagonal`, `short_diagonal`, `orthogonal`, `elbow`, `right_angle`, `rounded_orthogonal`, `hv`, `vh`, `curved`, `smooth_curve`, `loop`, and `freeform`.
 
 Rules for `arrow_plan`:
 
@@ -200,6 +200,7 @@ Rules for `arrow_plan`:
 - `merge` / `fan_in` should terminate at a `junction_point`, `merge_bus`, or `multi_port_junction`.
 - `fork` / `fan_out` should originate from a `junction_point`, `merge_bus`, or `multi_port_junction`.
 - `loop_update` should use one continuous `loop_arrow`, not several line fragments plus a detached arrowhead.
+- `rounded_orthogonal` should use `rounded_orthogonal_connector` or `route: "rounded_orthogonal"` with an explicit corner radius. Do not map it to `smooth_curve`.
 - `scene_validate.py --strict` treats missing or violated arrow-plan bindings as errors.
 
 For local attention-like diagrams, record `metadata.local_motifs` or region-level motif facts before writing edges. Motif names can include `attention_score_motif`, `value_weighting_motif`, `residual_add_norm_motif`, and `concat_merge_motif`. Motif rules are source-level constraints, not decorative labels; for example Softmax in an attention-score motif is a floating label and should not become an edge endpoint.
@@ -1648,6 +1649,7 @@ Routing fields:
 - `horizontal`: force a horizontal line from source x/y to target x at the source y
 - `vertical`: force a vertical line from source x/y to target y at the source x
 - `orthogonal`, `elbow`, `right_angle`: force right-angle routing
+- `rounded_orthogonal`: force right-angle routing but render visible 90-degree bends as fixed-radius rounded corners
 - `hv`, `horizontal_then_vertical`: horizontal segment first, then vertical
 - `vh`, `vertical_then_horizontal`: vertical segment first, then horizontal
 
@@ -1670,6 +1672,28 @@ Explicit point routes can be made axis-aligned without calculating every interme
 ```
 
 Use `orthogonalize_points: true` when the source path is a right-angle paper-flow route but the scene only records bend waypoints. The renderer inserts missing horizontal/vertical elbow points so tiny endpoint mismatches do not become visible diagonals. Keep `allow_diagonal: true` only for source-visible diagonal callouts or fan-in/fan-out strokes.
+
+Use `rounded_orthogonal_connector` when the source path is still orthogonal, but each 90-degree turn is visibly rounded. This is different from a smooth curve: the straight horizontal/vertical lanes must stay straight, and only the bend corners are rounded.
+
+```json
+{
+  "id": "branch_to_output",
+  "type": "rounded_orthogonal_connector",
+  "arrow_plan_id": "A012",
+  "from": "branch_bus:right@0.50",
+  "points": [[620, 310], [620, 410]],
+  "to": "output:left@0.50",
+  "route": "rounded_orthogonal",
+  "orthogonalize_points": true,
+  "corner_radius_px": 14,
+  "style": {
+    "end_arrow": "triangle",
+    "line_weight_pt": 1.2
+  }
+}
+```
+
+For exact replicas, set the matching arrow inventory item to `route_shape: "rounded_orthogonal"`. Do not use `curve_mode: "smooth"` or `loop_arrow` for a rounded orthogonal connector unless the source line is truly a free curve or an outer loop.
 
 Use `boundary_arrow` when the source arrow starts from a group/frame boundary rather than from the last internal component:
 

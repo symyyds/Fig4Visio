@@ -1055,6 +1055,22 @@
         "axis_snap_in": 0.02
       }
     },
+    "rounded_orthogonal_connector": {
+      "renderer": "rounded_orthogonal_path",
+      "default_style": {
+        "line": "#333333",
+        "line_weight_pt": 1.15,
+        "line_dash": "solid",
+        "end_arrow": "triangle",
+        "arrow_size": "small",
+        "route": "rounded_orthogonal",
+        "orthogonalize_points": true,
+        "corner_radius_in": 0.08,
+        "corner_samples": 5,
+        "snap_tolerance_in": 0.04,
+        "axis_snap_in": 0.02
+      }
+    },
     "curved_arrow": {
       "renderer": "curved_path",
       "default_style": {

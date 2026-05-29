@@ -22,7 +22,7 @@ Focus on visible fidelity only:
 - global layout and aspect
 - module count and placement
 - local topology
-- arrow direction and landing points
+- arrow direction, landing points, and route shape (straight, orthogonal, rounded orthogonal, smooth curve, loop)
 - node/component visual grammar
 - text appearance
 - density, spacing, and alignment

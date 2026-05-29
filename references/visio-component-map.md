@@ -53,6 +53,7 @@ It uses a controlled semantic vocabulary so the analysis side stays stable while
 | `arrow_connector` | directional relation | straight line with arrow |
 | `dynamic_connector` | routed relation | same renderer as arrow connector, with route support |
 | `lane_arrow` | short horizontal/vertical paper-flow lane | forced-axis straight arrow with stricter validation |
+| `rounded_orthogonal_connector` | orthogonal connector with rounded 90-degree bends | sampled quarter-arc path with final arrowhead |
 | `curved_arrow` | smooth curved relation or cycle segment | one continuous editable path with arrowhead |
 | `loop_arrow` | outer training/update loop arrow | one continuous editable path with tangent arrowhead |
 | `dashed_feedback_path` | dashed loss/backprop/training feedback path | one continuous dashed path with final arrowhead |
@@ -138,6 +139,8 @@ For multimodal pipeline figures, preserve the visible lane grammar:
 - Use `modality_spine` for the shared vertical gray availability/response bar and encode side ports with `ports`.
 - Use explicit horizontal connectors from each modality lane into the projection/fusion module instead of diagonal center-to-center edges.
 - Use `lane_arrow` for short local lanes such as cuboid feature blocks into an extractor, `GAP -> GMP`, and feature maps into aggregation. Do not use `route: "straight"` with slightly different y values; it will render as a visibly tilted arrow.
+
+Use `rounded_orthogonal_connector` for source connectors that are visibly axis-aligned but have rounded 90-degree corners. Set `route: "rounded_orthogonal"`, `orthogonalize_points: true`, and `corner_radius_in` or `corner_radius_px`. Do not replace these with `curved_arrow`/`loop_arrow` or `curve_mode: "smooth"`; smooth curves globally bend the lane and can turn an intended right-angle route into a wavy connector.
 
 Use `math_vector` for formula blocks with brackets and stacked entries, especially `q = [q_RGB, q_IR, q_SAR]^T` after a `Quality Head`. Do not rely on Unicode bracket glyphs inside a normal `text_block`; line height and font fallback vary and the bracket/entry alignment often drifts in Visio exports.
 
