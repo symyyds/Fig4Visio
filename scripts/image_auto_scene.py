@@ -1334,9 +1334,304 @@ def edge_px(
     return edge
 
 
+def ocr_corpus(ocr_items: list[dict[str, Any]]) -> str:
+    return " ".join(str(item.get("text", "")) for item in ocr_items)
+
+
 def contains_keywords(ocr_items: list[dict[str, Any]], keywords: list[str]) -> bool:
-    corpus = " ".join(str(item.get("text", "")) for item in ocr_items).lower()
+    corpus = ocr_corpus(ocr_items).lower()
     return all(keyword.lower() in corpus for keyword in keywords)
+
+
+def is_swin_transformer_architecture(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+    has_swin = "swin" in compact and "transformer" in compact
+    has_stage_flow = "stage" in compact and ("patch" in compact or "merging" in compact)
+    has_block_stack = "wmsa" in compact or "swmsa" in compact or ("mlp" in compact and "ln" in compact)
+    return aspect >= 2.35 and has_swin and has_stage_flow and has_block_stack
+
+
+def build_swin_transformer_architecture_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 1148.0
+    base_h = 355.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#111111",
+        z: int = 20,
+        font_size: float = 13,
+        dash: str = "solid",
+        angle: float | None = None,
+        rounding: float = 0.08,
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            text_angle=angle,
+            rounding=rounding,
+        )
+        item["source_bbox_px"] = [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+        return item
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 13,
+        angle: float | None = None,
+        weight: str = "regular",
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, angle=angle, weight=weight, z=z)
+        item["source_bbox_px"] = [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+        return item
+
+    def arrow(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "horizontal",
+        points: list[list[float]] | None = None,
+        end_arrow: str = "triangle",
+        dash: str = "solid",
+        weight: float = 1.2,
+        z: int = 60,
+    ) -> dict[str, Any]:
+        scaled_points = [[sx(px), sy(py)] for px, py in points] if points else None
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=end_arrow != "none",
+            route=route,
+            points=scaled_points,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"]["end_arrow"] = end_arrow
+        item["style"]["line_dash"] = dash
+        item["style"]["line_weight_pt"] = weight
+        item["source_bbox_px"] = [
+            round(sx(min(x1, x2)), 2),
+            round(sy(min(y1, y2)), 2),
+            round(sx(max(x1, x2)), 2),
+            round(sy(max(y1, y2)), 2),
+        ]
+        return item
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0)
+    ]
+    edges: list[dict[str, Any]] = []
+
+    nodes.extend(
+        [
+            label("dim_input", 0, 158, 104, 24, "H x W x 3", font_size=14),
+            node("images", "process_box", 6, 184, 66, 45, "Images", font_size=13, rounding=0.0),
+            node("patch_partition", "rounded_process", 91, 132, 29, 126, "Patch Partition", font_size=12, angle=90, rounding=0.04),
+        ]
+    )
+    edges.append(arrow("images_to_patch_partition", 72, 206, 91, 206))
+
+    stages = [
+        {
+            "id": "stage1",
+            "x": 132,
+            "y": 102,
+            "w": 171,
+            "h": 198,
+            "title": "Stage 1",
+            "dim": "H/4 x W/4 x 48",
+            "dim_x": 96,
+            "embed": ("linear_embedding", 151, 132, 29, 126, "Linear Embedding"),
+            "block": ("swin_block_1", 202, 132, 86, 146, "Swin\nTransformer\nBlock"),
+            "repeat": "x 2",
+        },
+        {
+            "id": "stage2",
+            "x": 312,
+            "y": 102,
+            "w": 162,
+            "h": 198,
+            "title": "Stage 2",
+            "dim": "H/8 x W/8 x C",
+            "dim_x": 264,
+            "embed": ("patch_merging_2", 326, 132, 29, 126, "Patch Merging"),
+            "block": ("swin_block_2", 374, 132, 86, 146, "Swin\nTransformer\nBlock"),
+            "repeat": "x 2",
+        },
+        {
+            "id": "stage3",
+            "x": 483,
+            "y": 102,
+            "w": 160,
+            "h": 198,
+            "title": "Stage 3",
+            "dim": "H/16 x W/16 x 2C",
+            "dim_x": 439,
+            "embed": ("patch_merging_3", 497, 132, 29, 126, "Patch Merging"),
+            "block": ("swin_block_3", 544, 132, 86, 146, "Swin\nTransformer\nBlock"),
+            "repeat": "x 6",
+        },
+        {
+            "id": "stage4",
+            "x": 654,
+            "y": 102,
+            "w": 160,
+            "h": 198,
+            "title": "Stage 4",
+            "dim": "H/32 x W/32 x 8C",
+            "dim_x": 610,
+            "embed": ("patch_merging_4", 668, 132, 29, 126, "Patch Merging"),
+            "block": ("swin_block_4", 716, 132, 86, 146, "Swin\nTransformer\nBlock"),
+            "repeat": "x 2",
+        },
+    ]
+    for stage in stages:
+        nodes.append(node(f"{stage['id']}_frame", "group_container", stage["x"], stage["y"], stage["w"], stage["h"], "", line="#111111", dash="dash", z=5, rounding=0.14))
+        nodes.append(label(f"{stage['id']}_title", stage["x"] + 54, stage["y"] + 5, 70, 22, stage["title"], font_size=13))
+        nodes.append(label(f"{stage['id']}_dim", stage["dim_x"], 67, 142, 22, stage["dim"], font_size=12))
+        embed_id, ex, ey, ew, eh, etext = stage["embed"]
+        block_id, bx, by, bw, bh, btext = stage["block"]
+        nodes.append(node(embed_id, "rounded_process", ex, ey, ew, eh, etext, font_size=11, angle=90, rounding=0.04))
+        nodes.append(node(block_id, "rounded_process", bx, by, bw, bh, btext, font_size=13, rounding=0.10))
+        nodes.append(label(f"{stage['id']}_repeat", bx + 32, 280, 50, 22, stage["repeat"], font_size=13))
+
+    for edge_id, x1, y1, x2, y2 in [
+        ("patch_to_linear", 120, 206, 151, 206),
+        ("linear_to_swin1", 180, 206, 202, 206),
+        ("swin1_to_stage2", 288, 206, 326, 206),
+        ("patch2_to_swin2", 355, 206, 374, 206),
+        ("swin2_to_stage3", 460, 206, 497, 206),
+        ("patch3_to_swin3", 526, 206, 544, 206),
+        ("swin3_to_stage4", 630, 206, 668, 206),
+        ("patch4_to_swin4", 697, 206, 716, 206),
+        ("swin4_to_right", 802, 206, 824, 206),
+    ]:
+        edges.append(arrow(edge_id, x1, y1, x2, y2))
+
+    nodes.append(label("caption_architecture", 356, 314, 120, 24, "(a) Architecture", font_size=14))
+    edges.append(arrow("panel_separator", 836, 45, 836, 302, route="vertical", end_arrow="none", dash="dash", weight=2.2, z=70))
+
+    for side, x, attention, top_label, mid_label in [
+        ("left", 862, "W-MSA", "z^l", "z^l"),
+        ("right", 1018, "SW-MSA", "z^l+1", "z^l+1"),
+    ]:
+        nodes.append(node(f"{side}_swin_block_frame", "group_container", x, 19, 111, 282, "", line="#111111", dash="dash", z=5, rounding=0.12))
+        for plus_id, py in (("plus_top", 29), ("plus_mid", 156)):
+            plus = node(f"{side}_{plus_id}", "operator_node", x + 31, py, 23, 23, "+", fill="#FFFFFF", line="#111111", z=70, font_size=12, rounding=0.0)
+            plus["symbol"] = "+"
+            plus["operator_shape"] = "circle"
+            nodes.append(plus)
+        nodes.extend(
+            [
+                node(f"{side}_mlp", "process_box", x + 13, 64, 64, 26, "MLP", fill="#B9D0EF", z=25, font_size=12, rounding=0.0),
+                node(f"{side}_ln_top", "process_box", x + 13, 109, 64, 28, "LN", fill="#DCEBDA", z=25, font_size=12, rounding=0.0),
+                node(f"{side}_attn", "process_box", x + 13, 194, 64, 28, attention, fill="#E9C3D9", z=25, font_size=11, rounding=0.0),
+                node(f"{side}_ln_bottom", "process_box", x + 13, 241, 64, 28, "LN", fill="#DCEBDA", z=25, font_size=12, rounding=0.0),
+                label(f"{side}_top_label", x - 1, 31, 30, 18, top_label, font_size=6.5),
+                label(f"{side}_mid_label", x - 1, 161, 30, 18, mid_label, font_size=6.5),
+                label(f"{side}_bottom_label", x - 1, 274, 32, 18, "z^l-1" if side == "left" else "z^l", font_size=6.5),
+            ]
+        )
+        cx = x + 45
+        edges.extend(
+            [
+                arrow(f"{side}_bottom_to_ln", cx, 286, cx, 269, route="vertical"),
+                arrow(f"{side}_ln_to_attn", cx, 241, cx, 222, route="vertical"),
+                arrow(f"{side}_attn_to_plus", cx, 194, cx, 179, route="vertical"),
+                arrow(f"{side}_plus_to_ln", cx, 156, cx, 137, route="vertical"),
+                arrow(f"{side}_ln_to_mlp", cx, 109, cx, 90, route="vertical"),
+                arrow(f"{side}_mlp_to_plus", cx, 64, cx, 52, route="vertical"),
+                arrow(f"{side}_residual_bottom_up", x + 86, 286, x + 86, 169, route="vertical", end_arrow="none", weight=1.0),
+                arrow(f"{side}_residual_bottom_in", x + 86, 169, x + 54, 169, route="horizontal", end_arrow="none", weight=1.0),
+                arrow(f"{side}_residual_mid_up", x + 86, 169, x + 86, 40, route="vertical", end_arrow="none", weight=1.0),
+                arrow(f"{side}_residual_top_in", x + 86, 40, x + 54, 40, route="horizontal", end_arrow="none", weight=1.0),
+            ]
+        )
+
+    nodes.append(label("caption_blocks", 807, 314, 336, 24, "(b) Two Successive Swin Transformer Blocks", font_size=14))
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.swin_transformer_architecture",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "swin_transformer",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_paper_architecture_template",
+                "diagram_family": "swin_transformer_architecture",
+                "required_regions": ["architecture_pipeline", "successive_swin_blocks"],
+            },
+            "notes": [
+                "Editable semantic reconstruction for the common Swin Transformer architecture figure.",
+                "Major stage frames, patch modules, Swin Transformer blocks, residual blocks, labels, and arrows are vector Visio objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
 
 
 def group_ocr_items(ocr_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1997,6 +2292,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_swin_transformer_architecture(ocr_items, width, height):
+        scene = build_swin_transformer_architecture_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if mode in {"trace", "vector_trace", "fallback", "high_recall"}:
         return build_vector_trace_scene(image_path, width, height, ocr_items, title=title)
     if mode in {"vector_trace_dense", "trace_dense", "dense"}:

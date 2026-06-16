@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import image_auto_scene  # noqa: E402
+import self_check  # noqa: E402
 from scene_to_visio import edge_route_points, edge_style, load_component_map, normalize_scene_coordinates, rounded_orthogonal_points  # noqa: E402
 
 
@@ -60,6 +61,44 @@ def draw_synthetic_icon_flow(path: Path) -> None:
     draw.ellipse((798, 146, 842, 190), outline=stroke, width=5)
     draw.line((833, 181, 860, 208), fill=stroke, width=5)
 
+    image.save(path)
+
+
+def fake_ocr_items(texts: list[str]) -> list[dict[str, object]]:
+    return [
+        {
+            "id": index,
+            "text": text,
+            "confidence": 0.98,
+            "box": image_auto_scene.Box(10 + index * 8, 10, 40, 20),
+            "points": [[10, 10], [50, 10], [50, 30], [10, 30]],
+        }
+        for index, text in enumerate(texts)
+    ]
+
+
+def draw_swin_like_line_art(path: Path, *, omit_left_pipeline: bool = False) -> None:
+    image = Image.new("RGB", (1148, 355), "white")
+    draw = ImageDraw.Draw(image)
+    stroke = "#111111"
+    if not omit_left_pipeline:
+        draw.rectangle((6, 184, 72, 229), outline=stroke, width=2)
+        draw.rectangle((91, 132, 120, 258), outline=stroke, width=2)
+        stages = [(132, 102, 303, 300), (312, 102, 474, 300), (483, 102, 643, 300), (654, 102, 814, 300)]
+        for sx, sy, ex, ey in stages:
+            draw.rounded_rectangle((sx, sy, ex, ey), radius=22, outline=stroke, width=2)
+            draw.rectangle((sx + 20, 132, sx + 49, 258), outline=stroke, width=2)
+            draw.rounded_rectangle((sx + 70, 132, sx + 156, 278), radius=14, outline=stroke, width=2)
+        for x1, x2 in [(72, 91), (120, 151), (180, 202), (288, 326), (355, 374), (460, 497), (526, 544), (630, 668), (697, 716), (802, 824)]:
+            draw.line((x1, 206, x2, 206), fill=stroke, width=2)
+            draw.polygon([(x2, 206), (x2 - 9, 201), (x2 - 9, 211)], fill=stroke)
+    for x in (862, 1018):
+        draw.rounded_rectangle((x, 19, x + 111, 301), radius=18, outline=stroke, width=2)
+        for y in (64, 109, 194, 241):
+            draw.rectangle((x + 13, y, x + 77, y + 28), outline=stroke, width=2)
+        for y in (40, 169):
+            draw.ellipse((x + 31, y - 11, x + 54, y + 12), outline=stroke, width=2)
+        draw.line((x + 45, 286, x + 45, 52), fill=stroke, width=2)
     image.save(path)
 
 
@@ -119,6 +158,52 @@ def test_vector_trace_mode_keeps_icon_vectors_no_raster(tmp_path: Path, monkeypa
     assert len(icon_edges) >= 30
     assert scene["assets"] == []
     assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+
+
+def test_swin_transformer_architecture_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "swin_arch.png"
+    Image.new("RGB", (1148, 355), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Swin Transformer Block",
+            "Stage 1",
+            "Patch Partition",
+            "Patch Merging",
+            "W-MSA",
+            "SW-MSA",
+            "MLP",
+            "LN",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.swin_transformer_architecture"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert sum(1 for node in scene["nodes"] if str(node.get("id", "")).endswith("_frame")) >= 6
+    assert "Patch Partition" in texts
+    assert "Linear Embedding" in texts
+    assert "Swin\nTransformer\nBlock" in texts
+    assert "W-MSA" in texts and "SW-MSA" in texts
+    assert len(scene["edges"]) >= 30
+
+
+def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
+    source = tmp_path / "source_swin.png"
+    bad = tmp_path / "bad_swin.png"
+    draw_swin_like_line_art(source)
+    draw_swin_like_line_art(bad, omit_left_pipeline=True)
+
+    identical = self_check.compare_images(source, source)
+    report = self_check.compare_images(source, bad)
+
+    assert identical["passed"] is True
+    assert report["passed"] is False
+    assert report["metrics"]["grid_density_similarity"] < report["rules"]["min_grid_density_similarity"] or report["score"] < report["threshold"]
 
 
 def test_rounded_orthogonal_points_rounds_only_the_corner() -> None:

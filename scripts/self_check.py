@@ -79,6 +79,44 @@ def ink_balance(source_mask: np.ndarray, replica_mask: np.ndarray) -> float:
     return max(0.0, min(1.0, 1.0 - abs(math.log(max(1e-6, ratio))) / math.log(6.0)))
 
 
+def grid_density_similarity(source_mask: np.ndarray, replica_mask: np.ndarray, rows: int = 8, cols: int = 16) -> float:
+    def densities(mask: np.ndarray) -> np.ndarray:
+        values: list[float] = []
+        height, width = mask.shape
+        for row in range(rows):
+            y1 = int(row * height / rows)
+            y2 = int((row + 1) * height / rows)
+            for col in range(cols):
+                x1 = int(col * width / cols)
+                x2 = int((col + 1) * width / cols)
+                values.append(float(mask[y1:y2, x1:x2].mean()))
+        return np.array(values, dtype=np.float32)
+
+    source_values = densities(source_mask)
+    replica_values = densities(replica_mask)
+    normalizer = float(source_values.mean()) + 1e-6
+    relative_l1 = float(np.mean(np.abs(source_values - replica_values)) / normalizer)
+    return max(0.0, min(1.0, 1.0 - relative_l1))
+
+
+def regional_ink_min_ratio(source_mask: np.ndarray, replica_mask: np.ndarray) -> float:
+    height, width = source_mask.shape
+    regions = [
+        (0, int(width * 0.34)),
+        (int(width * 0.34), int(width * 0.72)),
+        (int(width * 0.72), width),
+    ]
+    ratios: list[float] = []
+    for x1, x2 in regions:
+        source_ratio = float(source_mask[:, x1:x2].mean())
+        replica_ratio = float(replica_mask[:, x1:x2].mean())
+        if source_ratio < 0.025:
+            continue
+        ratio = replica_ratio / max(1e-6, source_ratio)
+        ratios.append(max(0.0, min(1.0, ratio)))
+    return min(ratios) if ratios else 1.0
+
+
 def load_font(size: int) -> ImageFont.ImageFont:
     for name in ("arial.ttf", "msyh.ttc", "simhei.ttf"):
         try:
@@ -146,9 +184,12 @@ def compare_images(
     *,
     output_json: Path | None = None,
     output_png: Path | None = None,
-    threshold: float = 0.34,
+    threshold: float = 0.38,
     min_edge_f1: float = 0.08,
     min_foreground_iou: float = 0.08,
+    min_grid_density_similarity: float = 0.32,
+    min_regional_ink_ratio: float = 0.12,
+    min_ink_balance: float = 0.50,
 ) -> dict[str, Any]:
     source = read_rgb(source_path)
     replica_raw = read_rgb(replica_path)
@@ -164,10 +205,19 @@ def compare_images(
     edge_f1 = f1_score(source_edges, replica_edges)
     color = color_similarity(source, replica)
     ink = ink_balance(source_fg, replica_fg)
+    grid_density = grid_density_similarity(source_fg, replica_fg)
+    regional_ink = regional_ink_min_ratio(source_fg, replica_fg)
     source_ink = float(source_fg.mean())
     replica_ink = float(replica_fg.mean())
-    score = 0.36 * edge_f1 + 0.30 * fg_iou + 0.20 * color + 0.14 * ink
-    passed = bool(score >= threshold and edge_f1 >= min_edge_f1 and fg_iou >= min_foreground_iou)
+    score = 0.40 * edge_f1 + 0.24 * fg_iou + 0.16 * grid_density + 0.12 * ink + 0.08 * color
+    passed = bool(
+        score >= threshold
+        and edge_f1 >= min_edge_f1
+        and fg_iou >= min_foreground_iou
+        and grid_density >= min_grid_density_similarity
+        and regional_ink >= min_regional_ink_ratio
+        and ink >= min_ink_balance
+    )
 
     report: dict[str, Any] = {
         "schema_version": "0.1",
@@ -183,6 +233,8 @@ def compare_images(
             "edge_f1": round(float(edge_f1), 4),
             "color_similarity": round(float(color), 4),
             "ink_balance": round(float(ink), 4),
+            "grid_density_similarity": round(float(grid_density), 4),
+            "regional_ink_min_ratio": round(float(regional_ink), 4),
             "source_ink_ratio": round(source_ink, 4),
             "replica_ink_ratio": round(replica_ink, 4),
         },
@@ -190,6 +242,9 @@ def compare_images(
             "threshold": threshold,
             "min_edge_f1": min_edge_f1,
             "min_foreground_iou": min_foreground_iou,
+            "min_grid_density_similarity": min_grid_density_similarity,
+            "min_regional_ink_ratio": min_regional_ink_ratio,
+            "min_ink_balance": min_ink_balance,
         },
         "notes": [
             "This is an automatic screenshot-level gate, not proof of perfect semantic replica.",
@@ -211,9 +266,12 @@ def main() -> int:
     parser.add_argument("--replica", required=True)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-png", required=True)
-    parser.add_argument("--threshold", type=float, default=0.34)
+    parser.add_argument("--threshold", type=float, default=0.38)
     parser.add_argument("--min-edge-f1", type=float, default=0.08)
     parser.add_argument("--min-foreground-iou", type=float, default=0.08)
+    parser.add_argument("--min-grid-density-similarity", type=float, default=0.32)
+    parser.add_argument("--min-regional-ink-ratio", type=float, default=0.12)
+    parser.add_argument("--min-ink-balance", type=float, default=0.50)
     args = parser.parse_args()
     report = compare_images(
         Path(args.source),
@@ -223,6 +281,9 @@ def main() -> int:
         threshold=args.threshold,
         min_edge_f1=args.min_edge_f1,
         min_foreground_iou=args.min_foreground_iou,
+        min_grid_density_similarity=args.min_grid_density_similarity,
+        min_regional_ink_ratio=args.min_regional_ink_ratio,
+        min_ink_balance=args.min_ink_balance,
     )
     print(json.dumps({"status": report["status"], "score": report["score"]}, ensure_ascii=False))
     return 0 if report["passed"] else 2

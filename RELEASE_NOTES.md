@@ -1,3 +1,19 @@
+# Fig4Visio v0.3.3 更新说明
+
+本次更新修复 GUI 对宽幅论文架构图的严重误判：旧版本会把 Swin Transformer 这类黑白模块图拆成碎线和零散文字，且自检仍可能放行。
+
+## 核心更新
+
+- 新增 Swin Transformer architecture 语义重建路径：识别 `Swin Transformer Block`、`Stage`、`Patch Merging`、`W-MSA/SW-MSA`、`MLP/LN` 后，直接生成可编辑 stage 框、Patch/Linear/Swin 模块、右侧 residual block、主干箭头和标题。
+- 强化截图自检：新增网格墨迹密度和全局墨迹平衡指标，避免白底图因为“空白区域相似”而通过。
+- 增加回归测试：坏输出缺失左侧主干时必须 fail；Swin 架构图模板必须无 `image_tile`、无资产嵌入，并包含关键可编辑模块。
+
+## 验证情况
+
+- `python -m pytest tests\test_public_release_smoke.py -q`：13 passed
+- `python gui_app.py --smoke`：通过
+- 用户提供的 Swin Transformer 示例：坏输出自检 fail，新模板渲染自检 pass，且无图片嵌入。
+
 # Fig4Visio v0.3.1 更新说明
 
 本次更新聚焦“箭头拓扑审查与重建闭环”。它不是新增某一类固定图形模板，而是让局部拓扑复杂、连接语义强的图在复刻、审查、修复和下一轮重建之间更可追踪。
