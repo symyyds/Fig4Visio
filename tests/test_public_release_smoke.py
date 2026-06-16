@@ -6,11 +6,13 @@ import sys
 from pathlib import Path
 
 from PIL import Image
+from PIL import ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import image_auto_scene  # noqa: E402
 from scene_to_visio import edge_route_points, edge_style, load_component_map, normalize_scene_coordinates, rounded_orthogonal_points  # noqa: E402
 
 
@@ -21,6 +23,44 @@ def run_script(script: str, *args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         capture_output=True,
     )
+
+
+def draw_synthetic_icon_flow(path: Path) -> None:
+    image = Image.new("RGB", (900, 420), "white")
+    draw = ImageDraw.Draw(image)
+    stroke = "#1F2937"
+    blue = "#2563EB"
+    green = "#059669"
+    orange = "#EA580C"
+
+    boxes = [(42, 120, 214, 250), (356, 120, 544, 250), (682, 120, 858, 250)]
+    for box in boxes:
+        draw.rounded_rectangle(box, radius=16, outline="#94A3B8", width=3, fill="#F8FAFC")
+    draw.line((214, 185, 356, 185), fill=stroke, width=4)
+    draw.polygon([(356, 185), (340, 176), (340, 194)], fill=stroke)
+    draw.line((544, 185, 682, 185), fill=stroke, width=4)
+    draw.polygon([(682, 185), (666, 176), (666, 194)], fill=stroke)
+
+    # Cloud icon.
+    draw.arc((72, 158, 132, 222), 188, 358, fill=blue, width=5)
+    draw.arc((116, 132, 188, 220), 190, 345, fill=blue, width=5)
+    draw.arc((150, 164, 212, 222), 200, 358, fill=blue, width=5)
+    draw.line((86, 220, 196, 220), fill=blue, width=5)
+
+    # Database cylinder icon.
+    draw.ellipse((394, 136, 504, 182), outline=green, width=5)
+    draw.line((394, 158, 394, 226), fill=green, width=5)
+    draw.line((504, 158, 504, 226), fill=green, width=5)
+    draw.arc((394, 204, 504, 248), 0, 180, fill=green, width=5)
+    draw.arc((394, 170, 504, 214), 0, 180, fill=green, width=4)
+
+    # User plus magnifier icon.
+    draw.ellipse((720, 136, 766, 182), outline=orange, width=5)
+    draw.arc((704, 174, 784, 246), 200, 340, fill=orange, width=5)
+    draw.ellipse((798, 146, 842, 190), outline=stroke, width=5)
+    draw.line((833, 181, 860, 208), fill=stroke, width=5)
+
+    image.save(path)
 
 
 def test_public_release_files_are_present() -> None:
@@ -47,6 +87,38 @@ def test_basic_scene_validates() -> None:
     result = run_script("scene_validate.py", str(ROOT / "templates" / "examples" / "basic_flow.scene.json"))
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Scene is valid" in result.stdout
+
+
+def test_image_auto_scene_reconstructs_icons_as_editable_vectors(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "icon_flow.png"
+    draw_synthetic_icon_flow(source)
+    monkeypatch.setattr(image_auto_scene, "run_ocr", lambda _path: [])
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    metadata = scene["metadata"]
+    icon_edges = [edge for edge in scene["edges"] if edge.get("semantic_role") == "editable_icon_stroke"]
+    icon_nodes = [node for node in scene["nodes"] if node.get("semantic_role") == "editable_icon_polygon"]
+
+    assert metadata["icon_reconstruction_policy"] == "editable_vector_no_raster"
+    assert metadata["icon_vector_regions"] >= 3
+    assert len(icon_edges) + len(icon_nodes) >= 30
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert all(edge["type"] == "line_segment" for edge in icon_edges)
+
+
+def test_vector_trace_mode_keeps_icon_vectors_no_raster(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "icon_flow_trace.png"
+    draw_synthetic_icon_flow(source)
+    monkeypatch.setattr(image_auto_scene, "run_ocr", lambda _path: [])
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="vector_trace_dense")
+    icon_edges = [edge for edge in scene["edges"] if edge.get("semantic_role") == "editable_icon_stroke"]
+
+    assert scene["metadata"]["icon_vector_regions"] >= 3
+    assert len(icon_edges) >= 30
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
 
 
 def test_rounded_orthogonal_points_rounds_only_the_corner() -> None:

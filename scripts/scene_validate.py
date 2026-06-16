@@ -3695,6 +3695,8 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
             except Exception as exc:
                 warnings.append(f"Edge `{edge_id}` route could not be linted: {exc}")
                 continue
+            if str(edge.get("semantic_role", "")).lower() == "editable_icon_stroke":
+                continue
 
             route_name = edge.get("route") or edge.get("style", {}).get("route") or style.get("route") or "auto"
             diagonal_segments = [

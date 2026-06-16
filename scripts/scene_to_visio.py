@@ -1108,6 +1108,10 @@ def apply_style(
     if text_color:
         try_set_formula(shape, "Char.Color", rgb_formula(str(text_color)))
 
+    text_transparency = style.get("text_transparency_pct")
+    if text_transparency is not None:
+        try_set_formula(shape, "Char.ColorTrans", f"{float(text_transparency)}%")
+
     font_size = fit_text_font_size(text, style, box_width, box_height)
     if font_size is not None:
         try_set_formula(shape, "Char.Size", f"{float(font_size)} pt")
