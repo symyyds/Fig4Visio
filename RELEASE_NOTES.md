@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.7 Release Notes
+
+This update adds a generalized sparse/no-frame variant inside the Swin Transformer reconstruction category. It is not tied to a filename or single image; the selector uses OCR span plus frame-density evidence to distinguish the standard Swin paper figure from sparse Swin variants where the source lacks large dashed stage frames.
+
+## Core Updates
+
+- Added `swin_transformer_sparse` reconstruction for low-contrast or sparse Swin architecture variants.
+- Keeps the standard `swin_transformer` template unchanged for normal framed Swin figures.
+- The sparse variant preserves visible modules as editable Visio objects: stage labels, split Patch Merging labels, Swin Transformer Block labels, residual plus stack, MLP/LN/W-MSA/SW-MSA blocks, arrows, and captions.
+- No original image, `image_tile`, or raster reference layer is embedded.
+- Added regression coverage for the sparse Swin variant.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 18 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- Retested the four previously supplied images: all passed screenshot self-check, all had `assets=0`, `image_tiles=0`.
+
 # Fig4Visio v0.3.6 Release Notes
 
 This update adds a category-specific semantic reconstruction path for compact attention mechanism paper figures. It is triggered by the combined OCR/layout signal `Attention mechanism` + `Sigmoid` + `Conv1d` + `Weighted vector` + `High-level features` + `AM-ResNet features`, so it does not change the global trace rules for unrelated images.

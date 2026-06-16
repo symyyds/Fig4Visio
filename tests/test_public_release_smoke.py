@@ -193,6 +193,69 @@ def test_swin_transformer_architecture_uses_editable_template(tmp_path: Path, mo
     assert len(scene["edges"]) >= 30
 
 
+def test_sparse_swin_transformer_variant_uses_no_frame_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "sparse_swin_arch.png"
+    Image.new("RGB", (1996, 622), "white").save(source)
+
+    def sparse_ocr(_path: Path) -> list[dict[str, object]]:
+        texts = [
+            (24, 354, 61, 25, "Images"),
+            (329, 188, 45, 21, "Stage"),
+            (396, 323, 50, 27, "Swin"),
+            (367, 351, 109, 23, "Transformer"),
+            (393, 374, 56, 24, "Block"),
+            (576, 339, 57, 21, "PatchMergi"),
+            (639, 188, 50, 21, "Stage2"),
+            (698, 323, 53, 26, "Swin"),
+            (669, 350, 112, 23, "Transformer"),
+            (695, 374, 59, 24, "Block"),
+            (879, 339, 57, 21, "PatchMergi"),
+            (943, 189, 37, 19, "Stage"),
+            (1000, 323, 51, 26, "Swin"),
+            (971, 352, 110, 21, "Transformer"),
+            (997, 375, 57, 24, "Block"),
+            (1181, 340, 57, 21, "PatchMergi"),
+            (1305, 323, 52, 27, "Swin"),
+            (1276, 351, 111, 23, "Transformer"),
+            (1302, 374, 57, 24, "Block"),
+            (1553, 112, 68, 29, "MLP"),
+            (1564, 194, 47, 28, "LN"),
+            (1556, 355, 61, 20, "W-MSA"),
+            (1563, 427, 48, 29, "LN"),
+            (1831, 111, 68, 29, "MLP"),
+            (1841, 194, 48, 28, "LN"),
+            (1832, 356, 65, 20, "SW-MSA"),
+            (1839, 425, 51, 34, "LN"),
+        ]
+        items: list[dict[str, object]] = []
+        for index, (x, y, w, h, text) in enumerate(texts):
+            items.append(
+                {
+                    "id": index,
+                    "text": text,
+                    "confidence": 0.98,
+                    "box": image_auto_scene.Box(x, y, w, h),
+                    "points": [[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+                }
+            )
+        return items
+
+    monkeypatch.setattr(image_auto_scene, "run_ocr", sparse_ocr)
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.swin_transformer_architecture"
+    assert scene["metadata"]["architecture_template"] == "swin_transformer_sparse"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert not any(str(node.get("id", "")).endswith("_frame") for node in scene["nodes"])
+    assert "Patch Mergi\nng" in texts
+    assert "Swin\nTransformer\nBlock" in texts
+    assert "W-MSA" in texts and "SW-MSA" in texts
+    assert len(scene["edges"]) >= 12
+
+
 def test_mask_res_block_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "mask_res_block.png"
     Image.new("RGB", (1113, 741), "white").save(source)
