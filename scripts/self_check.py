@@ -117,6 +117,48 @@ def regional_ink_min_ratio(source_mask: np.ndarray, replica_mask: np.ndarray) ->
     return min(ratios) if ratios else 1.0
 
 
+def failed_rules_for_report(
+    *,
+    score: float,
+    threshold: float,
+    edge_f1: float,
+    min_edge_f1: float,
+    fg_iou: float,
+    min_foreground_iou: float,
+    grid_density: float,
+    min_grid_density_similarity: float,
+    regional_ink: float,
+    min_regional_ink_ratio: float,
+    ink: float,
+    min_ink_balance: float,
+) -> list[dict[str, Any]]:
+    checks = [
+        ("score_threshold", "score", score, threshold),
+        ("edge_f1", "edge_f1", edge_f1, min_edge_f1),
+        ("foreground_iou", "foreground_iou", fg_iou, min_foreground_iou),
+        (
+            "grid_density_similarity",
+            "grid_density_similarity",
+            grid_density,
+            min_grid_density_similarity,
+        ),
+        ("regional_ink_min_ratio", "regional_ink_min_ratio", regional_ink, min_regional_ink_ratio),
+        ("ink_balance", "ink_balance", ink, min_ink_balance),
+    ]
+    failures: list[dict[str, Any]] = []
+    for rule, metric, value, required in checks:
+        if value < required:
+            failures.append(
+                {
+                    "rule": rule,
+                    "metric": metric,
+                    "value": round(float(value), 4),
+                    "required": round(float(required), 4),
+                }
+            )
+    return failures
+
+
 def load_font(size: int) -> ImageFont.ImageFont:
     for name in ("arial.ttf", "msyh.ttc", "simhei.ttf"):
         try:
@@ -218,15 +260,30 @@ def compare_images(
         and regional_ink >= min_regional_ink_ratio
         and ink >= min_ink_balance
     )
+    failed_rules = failed_rules_for_report(
+        score=score,
+        threshold=threshold,
+        edge_f1=edge_f1,
+        min_edge_f1=min_edge_f1,
+        fg_iou=fg_iou,
+        min_foreground_iou=min_foreground_iou,
+        grid_density=grid_density,
+        min_grid_density_similarity=min_grid_density_similarity,
+        regional_ink=regional_ink,
+        min_regional_ink_ratio=min_regional_ink_ratio,
+        ink=ink,
+        min_ink_balance=min_ink_balance,
+    )
 
     report: dict[str, Any] = {
-        "schema_version": "0.1",
+        "schema_version": "0.2",
         "source": str(source_path),
         "replica": str(replica_path),
         "status": "pass" if passed else "fail",
         "passed": passed,
         "score": round(float(score), 4),
         "threshold": threshold,
+        "failed_rules": failed_rules,
         "metrics": {
             "foreground_iou": round(float(fg_iou), 4),
             "foreground_f1": round(float(fg_f1), 4),

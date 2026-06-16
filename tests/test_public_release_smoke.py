@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import image_auto_scene  # noqa: E402
 import self_check  # noqa: E402
+import gui_app  # noqa: E402
 from scene_to_visio import edge_route_points, edge_style, load_component_map, normalize_scene_coordinates, rounded_orthogonal_points  # noqa: E402
 
 
@@ -192,6 +193,40 @@ def test_swin_transformer_architecture_uses_editable_template(tmp_path: Path, mo
     assert len(scene["edges"]) >= 30
 
 
+def test_mask_res_block_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "mask_res_block.png"
+    Image.new("RGB", (1113, 741), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Conv7-64",
+            "Batch normalization",
+            "ReLU",
+            "Max-pooling",
+            "Original res-block",
+            "Mask res-block",
+            "Mask_i",
+            "x_i",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.mask_res_block"
+    assert scene["metadata"]["architecture_template"] == "mask_res_block"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert "Conv7-64" in texts
+    assert "Batch normalization" in texts
+    assert "Max-pooling" in texts
+    assert "(a) Original res-block" in texts
+    assert "(b) Mask res-block" in texts
+    assert any(node.get("id") == "right_gate1" and node.get("symbol") == "x" for node in scene["nodes"])
+    assert len(scene["edges"]) >= 25
+
+
 def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     source = tmp_path / "source_swin.png"
     bad = tmp_path / "bad_swin.png"
@@ -202,8 +237,32 @@ def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     report = self_check.compare_images(source, bad)
 
     assert identical["passed"] is True
+    assert identical["failed_rules"] == []
     assert report["passed"] is False
+    assert report["failed_rules"]
     assert report["metrics"]["grid_density_similarity"] < report["rules"]["min_grid_density_similarity"] or report["score"] < report["threshold"]
+
+
+def test_gui_self_check_summary_reports_gate_failure_after_score_passes() -> None:
+    report = {
+        "passed": False,
+        "score": 0.417,
+        "threshold": 0.38,
+        "failed_rules": [
+            {
+                "rule": "grid_density_similarity",
+                "metric": "grid_density_similarity",
+                "value": 0.0,
+                "required": 0.32,
+            }
+        ],
+    }
+
+    summary = gui_app.format_self_check_failure_summary(report, [{}, {}, {}])
+
+    assert "已达到阈值" in summary
+    assert "网格密度分布" in summary
+    assert "低于阈值" not in summary
 
 
 def test_rounded_orthogonal_points_rounds_only_the_corner() -> None:

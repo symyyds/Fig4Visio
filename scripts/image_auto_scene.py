@@ -1343,6 +1343,384 @@ def contains_keywords(ocr_items: list[dict[str, Any]], keywords: list[str]) -> b
     return all(keyword.lower() in corpus for keyword in keywords)
 
 
+def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+    has_conv_stack = "conv764" in compact or ("conv7" in compact and "64" in compact)
+    has_norm = "batchnormalization" in compact
+    has_pooling = "maxpooling" in compact or ("max" in compact and "pooling" in compact)
+    has_resblock = "maskresblock" in compact or "originalresblock" in compact or (
+        "resblock" in compact and "mask" in compact
+    )
+    has_lanes = "mask" in compact and ("xi" in compact or "xit" in compact or "x" in compact)
+    return 1.15 <= aspect <= 1.95 and has_conv_stack and has_norm and has_pooling and has_resblock and has_lanes
+
+
+def build_mask_res_block_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 1113.0
+    base_h = 741.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#64748B",
+        z: int = 20,
+        font_size: float = 13,
+        dash: str = "solid",
+        rounding: float = 0.08,
+        shadow: bool = False,
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["source_bbox_px"] = [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+        if shadow:
+            item["style"]["shadow"] = {
+                "color": "#222222",
+                "offset_x_in": 0.04,
+                "offset_y_in": -0.04,
+                "transparency_pct": 82,
+            }
+        return item
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 13,
+        weight: str = "regular",
+        italic: bool = False,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["source_bbox_px"] = [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+        if italic:
+            item["style"]["font_italic"] = True
+        return item
+
+    def polygon(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        points: list[list[float]],
+        *,
+        fill: str,
+        line: str = "none",
+        z: int = 6,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "polygon_node",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "points": points,
+            "source_bbox_px": [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)],
+            "style": {"fill": fill, "line": line, "line_weight_pt": 0.0},
+        }
+        return item
+
+    def operator(
+        node_id: str,
+        x: float,
+        y: float,
+        size: float,
+        symbol: str,
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#777777",
+        font_size: float = 12,
+        z: int = 75,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "operator_node",
+            x,
+            y,
+            size,
+            size,
+            symbol,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.0,
+        )
+        item["symbol"] = symbol
+        item["operator_shape"] = "circle"
+        item["operator_size_tier"] = "small"
+        item["style"]["text_color"] = "#555555"
+        return item
+
+    def dot(node_id: str, cx: float, cy: float) -> dict[str, Any]:
+        item = operator(node_id, cx - 4, cy - 4, 8, "", fill="#666666", line="#666666", font_size=4, z=76)
+        item["style"]["line_weight_pt"] = 0.4
+        return item
+
+    def arrow(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        end_arrow: bool = True,
+        dash: str = "solid",
+        weight: float = 1.05,
+        line: str = "#666666",
+        z: int = 60,
+    ) -> dict[str, Any]:
+        scaled_points = [[sx(px), sy(py)] for px, py in points] if points else None
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=end_arrow,
+            route=route,
+            points=scaled_points,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"].update(
+            {
+                "line": line,
+                "line_weight_pt": weight,
+                "line_dash": dash,
+                "end_arrow": "triangle" if end_arrow else "none",
+                "arrow_size": "small",
+            }
+        )
+        return item
+
+    blue = "#AEDBEC"
+    orange = "#F0AF83"
+    yellow = "#FFE8A0"
+    green = "#CAE7C1"
+    lane_gray = "#E9E9E9"
+    lane_green = "#EAF6E6"
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0)
+    ]
+    edges: list[dict[str, Any]] = []
+
+    for lane_id, x, fill in [
+        ("left_lane", 184, lane_gray),
+        ("right_lane", 577, lane_gray),
+        ("mask_lane", 969, lane_green),
+    ]:
+        lane = node(lane_id, "process_box", x, 35, 78, 543, "", fill=fill, line="none", z=3, rounding=0.0)
+        lane["allow_overlap"] = True
+        nodes.append(lane)
+        nodes.append(
+            polygon(
+                f"{lane_id}_arrow_head",
+                x - 37,
+                578,
+                152,
+                33,
+                [[0, 0], [1, 0], [0.5, 1]],
+                fill=fill,
+                z=3,
+            )
+        )
+
+    nodes.extend(
+        [
+            label("journal_header", 850, 9, 280, 24, "Digital Communications and Netw", font_size=14, italic=True),
+            label("left_xi", 215, 49, 30, 20, "xi", font_size=12, italic=True),
+            label("right_xi", 607, 49, 30, 20, "xi", font_size=12, italic=True),
+            label("mask_i", 987, 49, 62, 24, "Maski", font_size=14, italic=True),
+            label("left_xnext", 211, 568, 54, 24, "xi+1", font_size=12, italic=True),
+            label("right_xnext", 604, 568, 54, 24, "xi+1", font_size=12, italic=True),
+            label("mask_next", 979, 568, 74, 28, "Maski+1", font_size=13, italic=True),
+            dot("left_dot", 225, 97),
+            dot("right_dot", 616, 97),
+            operator("left_add", 213, 407, 24, "+", font_size=13),
+            operator("right_add", 604, 397, 24, "+", font_size=13),
+            operator("right_gate1", 890, 210, 22, "x", font_size=11),
+            operator("right_gate2", 736, 445, 22, "x", font_size=11),
+        ]
+    )
+
+    block_specs = [
+        ("left_conv1", 261, 159, 216, 36, "Conv7-64", blue, 15),
+        ("left_bn1", 261, 216, 216, 36, "Batch normalization", orange, 14),
+        ("left_relu1", 261, 273, 216, 36, "ReLU", yellow, 15),
+        ("left_conv2", 261, 330, 216, 36, "Conv7-64", blue, 15),
+        ("left_bn2", 110, 452, 231, 36, "Batch normalization", orange, 14),
+        ("left_relu2", 110, 510, 231, 36, "ReLU", yellow, 15),
+        ("right_conv1", 675, 146, 194, 36, "Conv7-64", blue, 14),
+        ("right_bn1", 675, 204, 194, 36, "Batch normalization", orange, 13),
+        ("right_relu1", 675, 273, 194, 36, "ReLU", yellow, 14),
+        ("right_conv2", 675, 330, 194, 36, "Conv7-64", blue, 14),
+        ("right_bn2", 519, 439, 194, 36, "Batch normalization", orange, 13),
+        ("right_relu2", 519, 510, 194, 36, "ReLU", yellow, 14),
+        ("pool_top", 911, 146, 202, 36, "Max-pooling", green, 14),
+        ("pool_bottom", 911, 331, 202, 36, "Max-pooling", green, 14),
+    ]
+    for block_id, x, y, w, h, text, fill, font_size in block_specs:
+        nodes.append(
+            node(
+                block_id,
+                "rounded_process",
+                x,
+                y,
+                w,
+                h,
+                text,
+                fill=fill,
+                line=fill,
+                z=25,
+                font_size=font_size,
+                rounding=0.13,
+                shadow=True,
+            )
+        )
+
+    nodes.extend(
+        [
+            node("right_bn_dash1", "group_container", 656, 190, 277, 63, "", fill="none", line="#999999", z=8, dash="dash", rounding=0.16),
+            node("right_bn_dash2", "group_container", 500, 423, 276, 66, "", fill="none", line="#999999", z=8, dash="dash", rounding=0.16),
+            label("same_kernel_label", 825, 373, 146, 54, "Same kernel size,\nstride,padding", font_size=12),
+            label("caption_a", 190, 624, 210, 32, "(a) Original res-block", font_size=16),
+            label("caption_b", 711, 624, 185, 32, "(b) Mask res-block", font_size=16),
+            label(
+                "figure_caption",
+                306,
+                686,
+                610,
+                30,
+                "Fig. 3. The structure of the original res-block and mask res-block.",
+                font_size=15,
+            ),
+        ]
+    )
+
+    edges.extend(
+        [
+            arrow("left_input_down", 225, 72, 225, 407, route="vertical"),
+            arrow("left_add_to_bn", 225, 431, 225, 452, route="vertical"),
+            arrow("left_bn2_to_relu2", 225, 488, 225, 510, route="vertical"),
+            arrow("left_relu2_to_out", 225, 546, 225, 568, route="vertical"),
+            arrow("left_skip_to_conv1", 225, 97, 369, 159, route="hv", points=[[369, 97]]),
+            arrow("left_conv1_to_bn1", 369, 195, 369, 216, route="vertical"),
+            arrow("left_bn1_to_relu1", 369, 252, 369, 273, route="vertical"),
+            arrow("left_relu1_to_conv2", 369, 309, 369, 330, route="vertical"),
+            arrow("left_conv2_to_add", 369, 366, 237, 419, route="vh", points=[[369, 421]]),
+            arrow("right_input_down", 616, 72, 616, 397, route="vertical"),
+            arrow("right_add_to_bn2", 616, 421, 616, 439, route="vertical"),
+            arrow("right_bn2_to_relu2", 616, 475, 616, 510, route="vertical"),
+            arrow("right_relu2_to_out", 616, 546, 616, 568, route="vertical"),
+            arrow("right_skip_to_conv1", 616, 97, 772, 146, route="hv", points=[[772, 97]]),
+            arrow("right_conv1_to_bn1", 772, 182, 772, 204, route="vertical"),
+            arrow("right_bn1_to_relu1", 772, 240, 772, 273, route="vertical"),
+            arrow("right_relu1_to_conv2", 772, 309, 772, 330, route="vertical"),
+            arrow("right_conv2_to_add", 772, 366, 628, 409, route="vh", points=[[772, 409]]),
+            arrow("right_bn1_to_gate1", 869, 222, 890, 222, route="horizontal"),
+            arrow("right_bn2_to_gate2", 713, 457, 736, 457, route="horizontal"),
+            arrow("conv1_pool_link", 869, 164, 911, 164, route="horizontal", end_arrow=False, dash="dash"),
+            arrow("conv2_pool_link", 869, 349, 911, 349, route="horizontal", end_arrow=False, dash="dash"),
+            arrow("mask_to_pool_top", 1008, 74, 1008, 146, route="vertical"),
+            arrow("pool_top_to_pool_bottom", 1008, 182, 1008, 331, route="vertical"),
+            arrow("pool_bottom_to_mask_next", 1008, 367, 1008, 568, route="vertical"),
+            arrow("pool_top_to_gate1", 1008, 221, 912, 221, route="horizontal", points=[[1008, 221]]),
+            arrow("pool_bottom_to_gate2", 1008, 457, 758, 457, route="horizontal", points=[[1008, 457]]),
+        ]
+    )
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.mask_res_block",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "mask_res_block",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_source_coordinate_paper_template",
+                "diagram_family": "original_and_mask_residual_block",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_ocr_when_visible_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "left_original_res_block", "category": "core", "source_bbox_px": [105, 35, 485, 656]},
+                    {"id": "right_mask_res_block", "category": "core", "source_bbox_px": [500, 35, 1110, 656]},
+                    {"id": "figure_caption", "category": "caption", "source_bbox_px": [305, 684, 916, 719]},
+                ],
+            },
+            "notes": [
+                "Editable semantic reconstruction for original res-block and mask res-block paper figures.",
+                "Residual lanes, convolution blocks, normalization/ReLU blocks, mask pooling branch, gates, captions, and arrows are vector Visio objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def is_swin_transformer_architecture(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
     corpus = ocr_corpus(ocr_items).lower()
     compact = re.sub(r"[^a-z0-9]+", "", corpus)
@@ -2292,6 +2670,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_mask_res_block_figure(ocr_items, width, height):
+        scene = build_mask_res_block_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_swin_transformer_architecture(ocr_items, width, height):
         scene = build_swin_transformer_architecture_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"

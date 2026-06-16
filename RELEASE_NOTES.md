@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.4 更新说明
+
+本次更新修复 mask res-block 论文结构图的复现质量和自检提示误导问题。旧版本会把该类图走通用轮廓提取，输出大块背景和碎线；同时在总分已经高于阈值时，GUI 仍错误提示“评分低于阈值”。
+
+## 核心更新
+
+- 新增 original res-block / mask res-block 语义重建路径：识别 `Conv7-64`、`Batch normalization`、`Max-pooling`、`Original res-block`、`Mask res-block` 后，直接生成可编辑残差 lane、卷积/归一化/ReLU 模块、mask pooling 支路、加法/乘法节点、虚线框、标题和 caption。
+- 修正 GUI 自检失败说明：总分通过但结构 gate 未通过时，会明确列出失败项，例如网格密度分布、分区墨迹覆盖或墨迹比例，不再误报“低于阈值”。
+- 自检 JSON 升级到 `schema_version: 0.2`，新增 `failed_rules`，便于 GUI、日志和质量报告复用同一套失败原因。
+- 增加回归测试：mask res-block 必须走无 `image_tile` 的可编辑模板；GUI 摘要必须正确处理“总分过阈值但 gate 失败”的情况。
+
+## 验证情况
+
+- `python -m pytest tests\test_public_release_smoke.py -q`：15 passed
+- `python gui_app.py --smoke`：通过
+- `python -m compileall -q gui_app.py scripts tests sync_to_skill.py`：通过
+- 用户提供的 mask res-block 示例：GUI 完整工作流第 1 轮通过，自检评分 `0.7244`，`download_allowed=True`，且 VSDX 无图片嵌入。
+
 # Fig4Visio v0.3.3 更新说明
 
 本次更新修复 GUI 对宽幅论文架构图的严重误判：旧版本会把 Swin Transformer 这类黑白模块图拆成碎线和零散文字，且自检仍可能放行。

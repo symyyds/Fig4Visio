@@ -393,6 +393,86 @@ def run_self_check(source_image: Path, replica_png: Path, check_dir: Path) -> tu
     return output_json, output_png, report
 
 
+SELF_CHECK_RULE_LABELS = {
+    "score_threshold": "总评分",
+    "edge_f1": "边缘匹配",
+    "foreground_iou": "前景覆盖",
+    "grid_density_similarity": "网格密度分布",
+    "regional_ink_min_ratio": "分区墨迹覆盖",
+    "ink_balance": "整体墨迹比例",
+}
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def self_check_failed_rules(report: dict[str, object]) -> list[dict[str, object]]:
+    explicit = report.get("failed_rules")
+    if isinstance(explicit, list):
+        return [item for item in explicit if isinstance(item, dict)]
+
+    metrics = report.get("metrics", {})
+    rules = report.get("rules", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+    if not isinstance(rules, dict):
+        rules = {}
+
+    checks = [
+        ("score_threshold", "score", report.get("score"), report.get("threshold", rules.get("threshold"))),
+        ("edge_f1", "edge_f1", metrics.get("edge_f1"), rules.get("min_edge_f1")),
+        ("foreground_iou", "foreground_iou", metrics.get("foreground_iou"), rules.get("min_foreground_iou")),
+        (
+            "grid_density_similarity",
+            "grid_density_similarity",
+            metrics.get("grid_density_similarity"),
+            rules.get("min_grid_density_similarity"),
+        ),
+        ("regional_ink_min_ratio", "regional_ink_min_ratio", metrics.get("regional_ink_min_ratio"), rules.get("min_regional_ink_ratio")),
+        ("ink_balance", "ink_balance", metrics.get("ink_balance"), rules.get("min_ink_balance")),
+    ]
+    failures: list[dict[str, object]] = []
+    for rule, metric, value_raw, required_raw in checks:
+        value = _float_or_none(value_raw)
+        required = _float_or_none(required_raw)
+        if value is None or required is None:
+            continue
+        if value < required:
+            failures.append({"rule": rule, "metric": metric, "value": value, "required": required})
+    return failures
+
+
+def format_failed_rule(rule: dict[str, object]) -> str:
+    rule_name = str(rule.get("rule") or rule.get("metric") or "unknown")
+    label = SELF_CHECK_RULE_LABELS.get(rule_name, rule_name)
+    value = _float_or_none(rule.get("value"))
+    required = _float_or_none(rule.get("required"))
+    if value is None or required is None:
+        return label
+    return f"{label} {value:.3f} < {required:.3f}"
+
+
+def format_self_check_failure_summary(self_check_report: dict[str, object], attempts: list[dict[str, object]]) -> str:
+    score = float(self_check_report.get("score", 0.0) or 0.0)
+    threshold = float(self_check_report.get("threshold", SELF_CHECK_THRESHOLD) or SELF_CHECK_THRESHOLD)
+    failures = self_check_failed_rules(self_check_report)
+    failure_text = "；".join(format_failed_rule(rule) for rule in failures[:4])
+    if len(failures) > 4:
+        failure_text += f"；另有 {len(failures) - 4} 项未达标"
+
+    if score < threshold:
+        if failure_text:
+            return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 低于阈值 {threshold:.2f}，未达标项：{failure_text}。"
+        return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 低于阈值 {threshold:.2f}。"
+    if failure_text:
+        return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 已达到阈值 {threshold:.2f}，但结构自检门槛未通过：{failure_text}。"
+    return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 已达到阈值 {threshold:.2f}，但自检状态仍为失败，请查看对比图。"
+
+
 def write_quality_report(
     *,
     scene_path: Path,
@@ -426,7 +506,7 @@ def write_quality_report(
     else:
         status = "self_check_failed"
         label = "自检未通过：禁止下载"
-        summary = f"已自动重跑 {len(attempts)} 轮，但最佳截图评分 {score:.3f} 仍低于阈值 {SELF_CHECK_THRESHOLD:.2f}。"
+        summary = format_self_check_failure_summary(self_check_report, attempts)
 
     report = {
         "schema_version": "0.2",
@@ -473,6 +553,11 @@ def write_quality_report(
     ]
     for key, value in self_check_report.get("metrics", {}).items():
         md_lines.append(f"- {key}: {value}")
+    failed_rules = self_check_failed_rules(self_check_report)
+    if failed_rules:
+        md_lines.extend(["", "## Failed Rules"])
+        for rule in failed_rules:
+            md_lines.append(f"- {format_failed_rule(rule)}")
     md_lines.extend(["", "## Attempts"])
     for attempt in attempts:
         md_lines.append(
@@ -522,10 +607,12 @@ def run_attempt(
     log("运行截图自检...")
     self_check_json, self_check_png, self_report = run_self_check(staged_source, png_path, check_dir)
     passed = bool(no_image_embedding and self_report.get("passed"))
+    failed_rule_text = "；".join(format_failed_rule(rule) for rule in self_check_failed_rules(self_report)[:4])
     log(
         f"自检结果: {'通过' if passed else '失败'}; "
         f"score={float(self_report.get('score', 0.0)):.3f}; "
         f"no_image_embedding={no_image_embedding}"
+        + (f"; 未达标项={failed_rule_text}" if failed_rule_text else "")
     )
 
     return {
