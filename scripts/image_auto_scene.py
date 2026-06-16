@@ -1357,6 +1357,372 @@ def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height
     return 1.15 <= aspect <= 1.95 and has_conv_stack and has_norm and has_pooling and has_resblock and has_lanes
 
 
+def is_cross_attention_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+    has_inputs = "amresnet" in compact and ("wav2vec20" in compact or "wav2vec" in compact)
+    has_attention = "softmax" in compact and "concat" in compact and "norm" in compact
+    has_output = "crossfused" in compact or ("cross" in compact and "fused" in compact)
+    has_caption = "crossattention" in compact or "attention" in compact
+    has_qkv = any(token in compact for token in ("qa", "qw", "ka", "kw", "va", "vw"))
+    return aspect >= 2.45 and has_inputs and has_attention and has_output and has_caption and has_qkv
+
+
+def build_cross_attention_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 1368.0
+    base_h = 438.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#6F6F6F",
+        z: int = 20,
+        font_size: float = 13,
+        dash: str = "solid",
+        rounding: float = 0.08,
+        shadow: bool = False,
+        italic: bool = False,
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        item["style"]["font_family"] = "Times New Roman"
+        if shadow:
+            item["style"]["shadow"] = {
+                "color": "#222222",
+                "offset_x_in": 0.035,
+                "offset_y_in": -0.035,
+                "transparency_pct": 84,
+            }
+        if italic:
+            item["style"]["font_italic"] = True
+        return item
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 12,
+        weight: str = "regular",
+        italic: bool = False,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        item["style"]["font_family"] = "Times New Roman"
+        if italic:
+            item["style"]["font_italic"] = True
+        return item
+
+    def operator(node_id: str, x: float, y: float, size: float, symbol: str, *, font_size: float = 11) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "operator_node",
+            x,
+            y,
+            size,
+            size,
+            symbol,
+            fill="#FFFFFF",
+            line="#777777",
+            z=72,
+            font_size=font_size,
+            rounding=0.0,
+        )
+        item["symbol"] = symbol
+        item["operator_shape"] = "circle"
+        item["operator_size_tier"] = "small"
+        item["style"]["text_color"] = "#666666"
+        return item
+
+    def grid_cells(rows: int, cols: int, color_a: str, color_b: str) -> list[list[object]]:
+        return [[r, c, color_a if (r + c) % 2 == 0 else color_b] for r in range(rows) for c in range(cols)]
+
+    def grid(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        rows: int = 4,
+        cols: int = 5,
+        color_a: str = "#F7BBD4",
+        color_b: str = "#B7DBF1",
+    ) -> dict[str, Any]:
+        return {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": 35,
+            "text": "",
+            "rows": rows,
+            "cols": cols,
+            "colored_cells": grid_cells(rows, cols, color_a, color_b),
+            "source_bbox_px": bbox(x, y, w, h),
+            "style": {
+                "grid_line": "#777777",
+                "grid_line_weight_pt": 0.55,
+                "line": "#777777",
+                "line_weight_pt": 0.55,
+            },
+        }
+
+    def edge_ref(
+        edge_id: str,
+        from_ref: str,
+        to_ref: str,
+        *,
+        route: str = "horizontal",
+        points: list[list[float]] | None = None,
+        color: str = "#6F6F6F",
+        weight: float = 1.05,
+        arrow: bool = True,
+        edge_type: str = "arrow_connector",
+        allow_diagonal: bool = False,
+        z: int = 60,
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "id": edge_id,
+            "type": edge_type,
+            "from": from_ref,
+            "to": to_ref,
+            "route": route,
+            "z": z,
+            "style": {
+                "line": color,
+                "line_weight_pt": weight,
+                "arrow_size": "small",
+                "end_arrow": "triangle" if arrow else "none",
+            },
+        }
+        if points:
+            item["points"] = [[sx(px), sy(py)] for px, py in points]
+            item["orthogonalize_points"] = route in {"orthogonal", "hv", "vh"}
+        if allow_diagonal:
+            item["allow_diagonal"] = True
+        return item
+
+    def edge_points(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        arrow: bool = True,
+        color: str = "#6F6F6F",
+        weight: float = 1.0,
+        edge_type: str = "arrow_connector",
+        z: int = 60,
+    ) -> dict[str, Any]:
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=arrow,
+            route=route,
+            points=[[sx(px), sy(py)] for px, py in points] if points else None,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["type"] = edge_type
+        item["style"].update(
+            {
+                "line": color,
+                "line_weight_pt": weight,
+                "arrow_size": "small",
+                "end_arrow": "triangle" if arrow else "none",
+            }
+        )
+        return item
+
+    blue = "#BDD0F4"
+    pink = "#F7C7E7"
+    green = "#BFD69D"
+    purple = "#D6C5E3"
+    gray = "#D6D6D6"
+    yellow = "#FDE8A4"
+    token_pink = "#FFE1F4"
+    token_blue = "#CFE0FF"
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0),
+        node("attention_frame", "group_container", 36, 10, 1086, 347, "", fill="none", line="#8F8F8F", z=5, dash="dash", rounding=0.22),
+        label("journal_header", 900, -17, 438, 28, "Digital Communications and Networks 11 (2025) 100", font_size=13, italic=True, z=95),
+        node("am_features", "rounded_process", 54, 91, 157, 73, "AM-ResNet\nfeatures", fill=blue, line=blue, z=24, font_size=13, shadow=True, rounding=0.12),
+        node("wav_features", "rounded_process", 54, 202, 157, 73, "Wav2vec 2.0\nfeatures", fill=pink, line=pink, z=24, font_size=13, shadow=True, rounding=0.12),
+        node("avg_pool", "rounded_process", 243, 203, 84, 72, "Avg\npool", fill=green, line=green, z=24, font_size=14, rounding=0.06),
+        node("fc_am", "rounded_process", 356, 91, 49, 73, "FC", fill=gray, line=gray, z=24, font_size=13, rounding=0.04),
+        node("fc_wav", "rounded_process", 356, 202, 49, 73, "FC", fill=gray, line=gray, z=24, font_size=13, rounding=0.04),
+        node("token_vw", "text_pill", 459, 81, 36, 36, "Vw", fill=token_pink, line=token_pink, z=30, font_size=12, italic=True, rounding=0.03),
+        node("token_kw", "text_pill", 459, 115, 36, 36, "Kw", fill=token_pink, line=token_pink, z=30, font_size=12, italic=True, rounding=0.03),
+        node("token_qa", "text_pill", 459, 148, 36, 36, "Qa", fill=token_blue, line=token_blue, z=30, font_size=12, italic=True, rounding=0.03),
+        node("token_qw", "text_pill", 459, 192, 36, 36, "Qw", fill=token_pink, line=token_pink, z=30, font_size=12, italic=True, rounding=0.03),
+        node("token_ka", "text_pill", 459, 226, 36, 36, "Ka", fill=token_blue, line=token_blue, z=30, font_size=12, italic=True, rounding=0.03),
+        node("token_va", "text_pill", 459, 257, 36, 31, "Va", fill=token_blue, line=token_blue, z=30, font_size=12, italic=True, rounding=0.03),
+        operator("op_top_attention", 502, 131, 18, "⊗", font_size=8),
+        operator("op_top_value", 583, 86, 18, "⊗", font_size=8),
+        operator("op_bottom_attention", 502, 224, 18, "⊗", font_size=8),
+        operator("op_bottom_value", 583, 260, 18, "⊗", font_size=8),
+        label("softmax_top", 519, 126, 52, 18, "Softmax", font_size=8, z=75),
+        label("softmax_bottom", 517, 202, 54, 18, "Softmax", font_size=8, z=75),
+        grid("attn_map_top", 572, 127, 39, 32, rows=4, cols=5),
+        grid("weighted_map_top", 620, 82, 39, 31, rows=5, cols=5, color_a="#FFD4EA", color_b="#F8C8DF"),
+        grid("attn_map_bottom", 572, 210, 39, 31, rows=4, cols=5),
+        grid("weighted_map_bottom", 620, 255, 39, 31, rows=5, cols=5, color_a="#D8D1EB", color_b="#C7E3EA"),
+        node("concat_top", "rounded_process", 589, 37, 101, 34, "Concat", fill=purple, line=purple, z=24, font_size=13, rounding=0.05),
+        node("norm_top_1", "rounded_process", 710, 36, 80, 34, "norm", fill=gray, line=gray, z=24, font_size=12, rounding=0.04),
+        node("ff_top", "rounded_process", 806, 28, 118, 52, "Feed\nforward", fill=gray, line=gray, z=24, font_size=12, rounding=0.08),
+        operator("op_add_top", 857, 126, 18, "+", font_size=10),
+        node("norm_top_2", "rounded_process", 932, 119, 79, 33, "norm", fill=gray, line=gray, z=24, font_size=12, rounding=0.04),
+        node("concat_bottom", "rounded_process", 590, 297, 101, 34, "Concat", fill=purple, line=purple, z=24, font_size=13, rounding=0.05),
+        node("norm_bottom_1", "rounded_process", 711, 298, 80, 34, "norm", fill=gray, line=gray, z=24, font_size=12, rounding=0.04),
+        node("ff_bottom", "rounded_process", 806, 288, 118, 55, "Feed\nforward", fill=gray, line=gray, z=24, font_size=12, rounding=0.08),
+        operator("op_add_bottom", 856, 223, 18, "+", font_size=10),
+        node("norm_bottom_2", "rounded_process", 932, 216, 79, 33, "norm", fill=gray, line=gray, z=24, font_size=12, rounding=0.04),
+        node("concat_final", "rounded_process", 1009, 169, 101, 34, "Concat", fill=purple, line=purple, z=24, font_size=13, rounding=0.05),
+        node("cross_fused", "rounded_process", 1154, 150, 173, 72, "Cross-fused\nfeatures", fill=yellow, line=yellow, z=24, font_size=13, shadow=True, rounding=0.09),
+        label("figure_caption", 471, 396, 430, 26, "Fig. 7. The architecture of the cross-attention.", font_size=13, weight="bold", z=95),
+    ]
+
+    edges: list[dict[str, Any]] = [
+        edge_ref("am_to_fc", "am_features:right@0.50", "fc_am:left@0.50"),
+        edge_ref("wav_to_avg", "wav_features:right@0.50", "avg_pool:left@0.50"),
+        edge_ref("avg_to_fc", "avg_pool:right@0.50", "fc_wav:left@0.50"),
+        edge_ref("am_skip_to_concat_top", "am_features:top@0.50", "concat_top:left@0.50", edge_type="residual_connector", points=[[132, 91], [132, 54], [589, 54]], route="orthogonal"),
+        edge_ref("avg_skip_to_concat_bottom", "avg_pool:bottom@0.50", "concat_bottom:left@0.50", edge_type="residual_connector", points=[[285, 275], [285, 314], [590, 314]], route="orthogonal"),
+        edge_ref("fc_am_to_qa", "fc_am:right@0.50", "token_qa:left@0.50", route="straight", color="#8DB7FF", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("fc_am_to_ka", "fc_am:right@0.50", "token_ka:left@0.50", route="straight", color="#8DB7FF", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("fc_am_to_va", "fc_am:right@0.50", "token_va:left@0.50", route="straight", color="#8DB7FF", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("fc_wav_to_vw", "fc_wav:right@0.50", "token_vw:left@0.50", route="straight", color="#FF91CA", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("fc_wav_to_kw", "fc_wav:right@0.50", "token_kw:left@0.50", route="straight", color="#FF91CA", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("fc_wav_to_qw", "fc_wav:right@0.50", "token_qw:left@0.50", route="straight", color="#FF91CA", weight=1.2, arrow=False, allow_diagonal=True),
+        edge_ref("kw_to_top_attention", "token_kw:right@0.50", "op_top_attention:left", route="horizontal", arrow=False),
+        edge_ref("qa_to_top_attention", "token_qa:right@0.50", "op_top_attention:bottom", route="orthogonal", points=[[495, 166], [511, 166], [511, 149]], arrow=False),
+        edge_points("top_attention_to_map", 520, 140, 572, 140, route="horizontal"),
+        edge_ref("vw_to_top_value", "token_vw:right@0.50", "op_top_value:left", route="horizontal", arrow=False),
+        edge_points("map_top_to_value", 592, 127, 592, 104, route="vertical"),
+        edge_points("top_value_to_weighted", 601, 95, 620, 95, route="horizontal"),
+        edge_ref("weighted_top_to_concat", "weighted_map_top:top@0.50", "concat_top:bottom@0.50", route="vertical"),
+        edge_ref("concat_top_to_norm", "concat_top:right@0.50", "norm_top_1:left@0.50"),
+        edge_ref("norm_top_to_ff", "norm_top_1:right@0.50", "ff_top:left@0.50"),
+        edge_ref("norm_top_residual", "norm_top_1:bottom@0.50", "op_add_top:left", edge_type="residual_connector", route="orthogonal", points=[[750, 70], [750, 135], [857, 135]]),
+        edge_ref("ff_top_to_add", "ff_top:bottom@0.50", "op_add_top:top", route="vertical"),
+        edge_ref("add_top_to_norm", "op_add_top:right", "norm_top_2:left@0.50"),
+        edge_ref("qw_to_bottom_attention", "token_qw:right@0.50", "op_bottom_attention:left", route="horizontal", arrow=False),
+        edge_ref("ka_to_bottom_attention", "token_ka:right@0.50", "op_bottom_attention:bottom", route="orthogonal", points=[[495, 244], [511, 244], [511, 242]], arrow=False),
+        edge_points("bottom_attention_to_map", 520, 233, 572, 233, route="horizontal"),
+        edge_ref("va_to_bottom_value", "token_va:right@0.50", "op_bottom_value:left", route="horizontal", arrow=False),
+        edge_points("map_bottom_to_value", 592, 241, 592, 260, route="vertical"),
+        edge_points("bottom_value_to_weighted", 601, 269, 620, 269, route="horizontal"),
+        edge_ref("weighted_bottom_to_concat", "weighted_map_bottom:bottom@0.50", "concat_bottom:top@0.50", route="vertical"),
+        edge_ref("concat_bottom_to_norm", "concat_bottom:right@0.50", "norm_bottom_1:left@0.50"),
+        edge_ref("norm_bottom_to_ff", "norm_bottom_1:right@0.50", "ff_bottom:left@0.50"),
+        edge_ref("norm_bottom_residual", "norm_bottom_1:top@0.50", "op_add_bottom:left", edge_type="residual_connector", route="orthogonal", points=[[751, 298], [751, 232], [856, 232]]),
+        edge_ref("ff_bottom_to_add", "ff_bottom:top@0.50", "op_add_bottom:bottom", route="vertical"),
+        edge_ref("add_bottom_to_norm", "op_add_bottom:right", "norm_bottom_2:left@0.50"),
+        edge_ref("top_norm_to_final", "norm_top_2:right@0.50", "concat_final:top@0.50", edge_type="residual_connector", route="orthogonal", points=[[1011, 136], [1060, 136], [1060, 169]]),
+        edge_ref("bottom_norm_to_final", "norm_bottom_2:right@0.50", "concat_final:bottom@0.50", edge_type="residual_connector", route="orthogonal", points=[[1011, 232], [1060, 232], [1060, 203]]),
+        edge_ref("final_to_output", "concat_final:right@0.50", "cross_fused:left@0.50", allow_diagonal=True),
+    ]
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.cross_attention",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "cross_attention",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_source_coordinate_paper_template",
+                "diagram_family": "cross_attention_feature_fusion",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_ocr_when_visible_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "input_features", "category": "input", "source_bbox_px": [54, 91, 405, 275]},
+                    {"id": "attention_core", "category": "core", "source_bbox_px": [405, 80, 660, 288]},
+                    {"id": "residual_heads", "category": "core", "source_bbox_px": [589, 28, 1011, 343]},
+                    {"id": "output_fusion", "category": "output", "source_bbox_px": [1009, 150, 1327, 222]},
+                    {"id": "figure_caption", "category": "caption", "source_bbox_px": [471, 396, 901, 422]},
+                ],
+            },
+            "notes": [
+                "Editable semantic reconstruction for the cross-attention feature fusion paper figure.",
+                "Q/K/V tokens, Softmax attention maps, value-weighted maps, Concat/norm/feed-forward branches, residual add nodes, and output module are vector Visio objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_mask_res_block_scene(
     image_path: Path,
     width: int,
@@ -2670,6 +3036,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_cross_attention_figure(ocr_items, width, height):
+        scene = build_cross_attention_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_mask_res_block_figure(ocr_items, width, height):
         scene = build_mask_res_block_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"

@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.5 更新说明
+
+本次更新修复 cross-attention 论文结构图的自动复现路径。旧版本会把这类图走通用轮廓/trace，生成大量碎线，虽然没有嵌入原图，但 attention 核心和残差分支不可读，且自检会禁止下载。
+
+## 核心更新
+
+- 新增 cross-attention 语义重建路径：识别 `AM-ResNet`、`Wav2vec 2.0`、`Softmax`、`Concat`、`norm`、`Feed forward`、`Cross-fused features` 和 `cross-attention` 后，直接生成可编辑模块。
+- Q/K/V token、Softmax、attention 小矩阵、value-weighted 小矩阵、上/下 Concat-norm-feed-forward 残差分支、最终 Concat 和 Cross-fused 输出均为 Visio 可编辑对象。
+- 小型 attention 矩阵使用 `grid_matrix` 复现，不使用图片裁片。
+- 增加回归测试：cross-attention 命中后必须无 `image_tile`、无 assets、包含至少 4 个 `grid_matrix`，并保留关键标签。
+
+## 验证情况
+
+- `python -m pytest tests\test_public_release_smoke.py -q`：16 passed
+- `python gui_app.py --smoke`：通过
+- `python -m compileall -q gui_app.py scripts tests sync_to_skill.py`：通过
+- 用户提供的 cross-attention 示例：GUI 完整工作流第 1 轮通过，自检评分 `0.5611`，`download_allowed=True`，且 VSDX 无图片嵌入。
+
 # Fig4Visio v0.3.4 更新说明
 
 本次更新修复 mask res-block 论文结构图的复现质量和自检提示误导问题。旧版本会把该类图走通用轮廓提取，输出大块背景和碎线；同时在总分已经高于阈值时，GUI 仍错误提示“评分低于阈值”。

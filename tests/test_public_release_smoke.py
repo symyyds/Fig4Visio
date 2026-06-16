@@ -227,6 +227,47 @@ def test_mask_res_block_uses_editable_template(tmp_path: Path, monkeypatch) -> N
     assert len(scene["edges"]) >= 25
 
 
+def test_cross_attention_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "cross_attention.png"
+    Image.new("RGB", (1368, 438), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "AM-ResNet",
+            "Wav2vec 2.0",
+            "features",
+            "FC",
+            "Vw",
+            "Kw",
+            "Qa",
+            "Qw",
+            "Ka",
+            "Va",
+            "Softmax",
+            "Concat",
+            "norm",
+            "Feed forward",
+            "Cross-fused features",
+            "Fig. 7. The architecture of the cross-attention.",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.cross_attention"
+    assert scene["metadata"]["architecture_template"] == "cross_attention"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert sum(1 for node in scene["nodes"] if node.get("type") == "grid_matrix") >= 4
+    assert "AM-ResNet\nfeatures" in texts
+    assert "Wav2vec 2.0\nfeatures" in texts
+    assert "Cross-fused\nfeatures" in texts
+    assert "Fig. 7. The architecture of the cross-attention." in texts
+    assert len(scene["edges"]) >= 35
+
+
 def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     source = tmp_path / "source_swin.png"
     bad = tmp_path / "bad_swin.png"
