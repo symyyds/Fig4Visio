@@ -6015,7 +6015,7 @@ def maybe_autofix_gan_tfr_scene(
     changes = apply_gan_tfr_recipes(fixed_scene)
     if not changes:
         return scene, scene_path
-    record_recipe_application(fixed_scene, "gan-tfr", changes, "visiomaster.scene_to_visio")
+    record_recipe_application(fixed_scene, "gan-tfr", changes, "fig4visio.scene_to_visio")
 
     output_name = basename or scene_path.stem
     fixed_path = output_dir / f"{output_name}.autofixed.scene.json"
@@ -6029,7 +6029,7 @@ def maybe_autofix_gan_tfr_scene(
 
 def run_rebuild_gate(scene_path: Path) -> None:
     scripts_dir = skill_root() / "scripts"
-    with tempfile.TemporaryDirectory(prefix="visiomaster_gate_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="fig4visio_gate_") as temp_dir:
         audit_path = Path(temp_dir) / "scene.audit.md"
         commands = [
             [sys.executable, str(scripts_dir / "scene_validate.py"), str(scene_path), "--strict"],
@@ -6056,7 +6056,7 @@ def run_rebuild_gate(scene_path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render a visiomaster scene.json into Visio.")
+    parser = argparse.ArgumentParser(description="Render a fig4visio scene.json into Visio.")
     parser.add_argument("scene", help="Path to scene.json")
     parser.add_argument("--output-dir", required=True, help="Directory for rendered outputs")
     parser.add_argument("--visible", action="store_true", help="Show Visio while rendering")

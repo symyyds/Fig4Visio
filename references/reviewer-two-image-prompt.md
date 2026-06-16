@@ -1,6 +1,6 @@
 # Reviewer Prompt
 
-Use this prompt when reviewing a visiomaster exact-replica round.
+Use this prompt when reviewing a fig4visio exact-replica round.
 
 ## Input Contract
 

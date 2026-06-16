@@ -34,7 +34,7 @@
 
 ## 能力提升
 
-这次更新让 Visiomaster 可以表达“圆角正交连接线”这一类常见论文/流程图连接器。它和 `loop_arrow`、`curved_arrow` 的定位不同：
+这次更新让 Fig4Visio 可以表达“圆角正交连接线”这一类常见论文/流程图连接器。它和 `loop_arrow`、`curved_arrow` 的定位不同：
 
 - `rounded_orthogonal_connector`：横平竖直的正交线，只把拐角圆滑化；
 - `loop_arrow` / `curved_arrow`：真正的连续曲线或外圈循环箭头；

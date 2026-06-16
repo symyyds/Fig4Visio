@@ -31,7 +31,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stage a canonical local source image for an exact Visiomaster replica round."
+        description="Stage a canonical local source image for an exact Fig4Visio replica round."
     )
     parser.add_argument("--input", required=True, help="Original source image path.")
     parser.add_argument("--workspace", required=True, help="Reconstruction workspace directory.")

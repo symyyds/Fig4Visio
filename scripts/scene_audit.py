@@ -1235,8 +1235,8 @@ def audit_scene(scene: dict[str, Any]) -> str:
                 )
 
     lines: list[str] = []
-    title = scene.get("metadata", {}).get("title", "visiomaster scene")
-    lines.append(f"# Visiomaster Audit: {title}")
+    title = scene.get("metadata", {}).get("title", "fig4visio scene")
+    lines.append(f"# Fig4Visio Audit: {title}")
     lines.append("")
     lines.append(f"- Style profile: `{profile_name}`")
     lines.append(f"- Nodes: {len(nodes)}")
@@ -1328,7 +1328,7 @@ def audit_scene(scene: dict[str, Any]) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a module-level audit report for a visiomaster scene.")
+    parser = argparse.ArgumentParser(description="Generate a module-level audit report for a fig4visio scene.")
     parser.add_argument("scene", help="Path to scene.json")
     parser.add_argument("--output", help="Optional markdown report path")
     parser.add_argument(

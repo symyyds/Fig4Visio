@@ -49,16 +49,16 @@ def main() -> int:
         page.PageSheet.CellsU("PageHeight").FormulaU = "3 in"
 
         shape = page.DrawRectangle(1, 1, 3, 2)
-        shape.Text = "Visiomaster"
+        shape.Text = "Fig4Visio"
         shape.CellsU("FillForegnd").FormulaU = "RGB(180,220,240)"
         shape.CellsU("LineColor").FormulaU = "RGB(80,80,80)"
 
         line = page.DrawLine(3.4, 1.5, 5.2, 1.5)
         line.CellsU("EndArrow").ResultIU = 13
 
-        vsdx_path = output_dir / "visiomaster_compatibility_check.vsdx"
-        png_path = output_dir / "visiomaster_compatibility_check.png"
-        svg_path = output_dir / "visiomaster_compatibility_check.svg"
+        vsdx_path = output_dir / "fig4visio_compatibility_check.vsdx"
+        png_path = output_dir / "fig4visio_compatibility_check.png"
+        svg_path = output_dir / "fig4visio_compatibility_check.svg"
 
         doc.SaveAs(str(vsdx_path))
         print(f"[OK] Wrote VSDX: {vsdx_path}")
@@ -77,7 +77,7 @@ def main() -> int:
                 print(f"       - {item}")
             return 1
 
-        print("[OK] Visio COM automation is available for Visiomaster.")
+        print("[OK] Visio COM automation is available for Fig4Visio.")
         return 0
     except Exception as exc:
         print("[FAIL] Visio COM smoke test failed.")

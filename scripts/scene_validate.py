@@ -4122,7 +4122,7 @@ def validate_scene(scene: dict, strict: bool = False) -> tuple[list[str], list[s
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate a visiomaster scene.json file.")
+    parser = argparse.ArgumentParser(description="Validate a fig4visio scene.json file.")
     parser.add_argument("scene", help="Path to scene.json")
     parser.add_argument("--strict", action="store_true")
     return parser.parse_args()

@@ -35,7 +35,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='VisiomasterGUI',
+    name='Fig4VisioGUI',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

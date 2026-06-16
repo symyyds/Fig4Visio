@@ -8,7 +8,7 @@ from font_utils import ROLE_FALLBACKS, font_inventory_summary, installed_font_ma
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="List fonts visible to visiomaster on this Windows machine.")
+    parser = argparse.ArgumentParser(description="List fonts visible to fig4visio on this Windows machine.")
     parser.add_argument("--json", action="store_true", help="Write machine-readable JSON.")
     parser.add_argument("--limit", type=int, default=80, help="Number of font names to print in text mode.")
     parser.add_argument("--check", action="append", default=[], help="Check whether a font family is installed. Can be repeated.")

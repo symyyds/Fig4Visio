@@ -206,7 +206,7 @@ def compare_images(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Compare source and rendered Visiomaster PNG screenshots.")
+    parser = argparse.ArgumentParser(description="Compare source and rendered Fig4Visio PNG screenshots.")
     parser.add_argument("--source", required=True)
     parser.add_argument("--replica", required=True)
     parser.add_argument("--output-json", required=True)

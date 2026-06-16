@@ -651,7 +651,7 @@ def apply_gan_tfr_recipes(scene: dict[str, Any]) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Apply deterministic visiomaster scene recipes before Visio rendering.")
+    parser = argparse.ArgumentParser(description="Apply deterministic fig4visio scene recipes before Visio rendering.")
     parser.add_argument("scene", help="Input scene.json")
     parser.add_argument("--output", help="Output scene.json. Defaults to in-place only with --in-place.")
     parser.add_argument("--in-place", action="store_true", help="Overwrite the input scene.")
@@ -683,7 +683,7 @@ def main() -> int:
         raise ValueError("Use --output, --in-place, or --dry-run.")
 
     if changes:
-        record_recipe_application(scene, args.recipe, changes, "visiomaster.scene_autofix")
+        record_recipe_application(scene, args.recipe, changes, "fig4visio.scene_autofix")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(scene, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote scene: {output_path}")

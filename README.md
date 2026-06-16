@@ -1,6 +1,6 @@
-# Visiomaster
+# Fig4Visio
 
-Visiomaster 是一个 Windows 优先的图片转可编辑 Visio 工具。它的目标不是把原图整张贴进 Visio，而是把流程图、架构图、论文模块图中的框、线、文字、图标和小模块拆成可编辑的 Visio 对象，并输出 `.vsdx`、`.png`、`.svg`。
+Fig4Visio 是一个 Windows 优先的图片转可编辑 Visio 工具。它的目标不是把原图整张贴进 Visio，而是把流程图、架构图、论文模块图中的框、线、文字、图标和小模块拆成可编辑的 Visio 对象，并输出 `.vsdx`、`.png`、`.svg`。
 
 当前版本包含一个简化 GUI：上传图片后自动处理、自动截图自检，通过后才允许下载 Visio 文件。GUI 默认禁用原图嵌入和局部图片贴片，优先生成可编辑形状、线段、文字和图标矢量部件。
 
@@ -90,10 +90,10 @@ work/gui_runs/<timestamp>/
 生成文件：
 
 ```text
-dist/VisiomasterGUI.exe
+dist/Fig4VisioGUI.exe
 ```
 
-注意：`dist/` 和生成的 `.exe` 默认不提交到 Git 仓库。GitHub 普通 Git 仓库单文件限制为 100MB，当前 EXE 超过该限制。需要直接下载 EXE 时，请在本仓库的 GitHub Releases 中下载 `VisiomasterGUI.exe`；也可以本地运行 `build_exe.ps1` 重新打包。
+注意：`dist/` 和生成的 `.exe` 默认不提交到 Git 仓库。GitHub 普通 Git 仓库单文件限制为 100MB，当前 EXE 超过该限制。需要直接下载 EXE 时，请在本仓库的 GitHub Releases 中下载 `Fig4VisioGUI.exe`；也可以本地运行 `build_exe.ps1` 重新打包。
 
 ## CLI 使用
 
@@ -153,7 +153,7 @@ python scripts\batch_workflow_check.py `
 ```text
 gui_app.py                       GUI 主程序
 build_exe.ps1                    EXE 打包脚本
-VisiomasterGUI.spec              PyInstaller 配置
+Fig4VisioGUI.spec                PyInstaller 配置
 requirements.txt                 Python 依赖
 scripts/image_auto_scene.py      图片转可编辑 scene
 scripts/scene_to_visio.py        scene 渲染为 Visio
@@ -171,7 +171,7 @@ tests/                           自动测试
 ```powershell
 python -m pytest tests\test_public_release_smoke.py -q
 python gui_app.py --smoke
-dist\VisiomasterGUI.exe --smoke
+dist\Fig4VisioGUI.exe --smoke
 ```
 
 测试覆盖内容包括：
@@ -188,7 +188,7 @@ dist\VisiomasterGUI.exe --smoke
 当前公开仓库：
 
 ```text
-https://github.com/symyyds/Visiomaster-GUI
+https://github.com/symyyds/Fig4Visio
 ```
 
 日常更新流程：

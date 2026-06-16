@@ -1,13 +1,13 @@
 ---
-name: visiomaster
+name: fig4visio
 description: Windows-first Visio diagram reconstruction workflow for flowcharts, architecture diagrams, and paper-style module figures. Reuses ppt-master style analysis and composition discipline on the front half, but outputs editable Visio .vsdx plus exported .svg and .png through a scene.json to Visio pipeline. Use when the user wants a diagram recreated as editable Visio shapes instead of a pasted screenshot or PPT-only result.
 ---
 
-# Visiomaster
+# Fig4Visio
 
 ## Overview
 
-`visiomaster` is a standalone skill for rebuilding diagram images into editable Visio deliverables.
+`fig4visio` is a standalone skill for rebuilding diagram images into editable Visio deliverables.
 
 It is optimized for:
 - flowcharts
@@ -63,7 +63,7 @@ First classify the source request:
 - paper figure cleanup/redraw
 - image-assisted redraw with a few raster sub-assets allowed
 
-If the diagram is mostly boxes, arrows, labels, and containers, stay in `visiomaster`.
+If the diagram is mostly boxes, arrows, labels, and containers, stay in `fig4visio`.
 
 For image-based exact replicas, always secure a local source image file before claiming strict review readiness:
 - If the user provides a filesystem path, use that path as `metadata.source_image` and all review `--original` inputs.

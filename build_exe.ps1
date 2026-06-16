@@ -14,7 +14,7 @@ Write-Host "Installing runtime and packaging dependencies..."
 & $Python -m pip install -r (Join-Path $Root "requirements.txt")
 & $Python -m pip install pyinstaller
 
-Write-Host "Building VisiomasterGUI.exe..."
+Write-Host "Building Fig4VisioGUI.exe..."
 Push-Location $Root
 try {
     & $Python -m PyInstaller `
@@ -22,7 +22,7 @@ try {
         --noconfirm `
         --noconsole `
         --onefile `
-        --name VisiomasterGUI `
+        --name Fig4VisioGUI `
         --paths ".\scripts" `
         --add-data "scripts;scripts" `
         --add-data "templates;templates" `
@@ -46,7 +46,7 @@ finally {
     Pop-Location
 }
 
-$ExePath = Join-Path $Root "dist\VisiomasterGUI.exe"
+$ExePath = Join-Path $Root "dist\Fig4VisioGUI.exe"
 if (-not (Test-Path $ExePath)) {
     throw "Build failed: $ExePath was not created."
 }

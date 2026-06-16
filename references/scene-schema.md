@@ -65,7 +65,7 @@ Recommended fields:
 ```json
 {
   "title": "Radar Sorter Overview",
-  "created_by": "visiomaster.image_to_scene",
+  "created_by": "fig4visio.image_to_scene",
   "style_profile": "paper_white",
   "fidelity": "exact",
   "source_image": "C:/path/source.png",
@@ -239,7 +239,7 @@ For large or dense figures, set `region_strategy` to one of:
 
 Use `font_scale` as a human-readable contract for consistent text sizing. The renderer does not require it, but `scene_validate.py` will warn when same-type nodes drift across a wide font range.
 
-For exact replicas, add typography intent when the source uses distinctive fonts. `visiomaster` cannot guarantee that every machine has the same font, so scenes should record both the preferred source font and a role-based fallback:
+For exact replicas, add typography intent when the source uses distinctive fonts. `fig4visio` cannot guarantee that every machine has the same font, so scenes should record both the preferred source font and a role-based fallback:
 
 ```json
 {

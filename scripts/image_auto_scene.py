@@ -998,7 +998,7 @@ def build_vector_trace_scene(
         "version": "0.1",
         "metadata": {
             "title": title or image_path.stem,
-            "created_by": f"visiomaster.image_auto_scene.{mode_name}",
+            "created_by": f"fig4visio.image_auto_scene.{mode_name}",
             "style_profile": "paper_white",
             "fidelity": "auto_editable_vector_trace_draft",
             "source_image": str(image_path.resolve()),
@@ -1748,7 +1748,7 @@ def build_clean_flow_scene(
         "version": "0.1",
         "metadata": {
             "title": image_path.stem,
-            "created_by": "visiomaster.image_auto_scene.clean_flow",
+            "created_by": "fig4visio.image_auto_scene.clean_flow",
             "style_profile": "paper_white",
             "fidelity": "generic_clean_flow_editable_rebuild",
             "source_image": str(image_path.resolve()),
@@ -1958,7 +1958,7 @@ def build_speck_drt_fkv_scene(image_path: Path, width: int, height: int, ocr_ite
         "version": "0.1",
         "metadata": {
             "title": image_path.stem,
-            "created_by": "visiomaster.image_auto_scene.semantic_template",
+            "created_by": "fig4visio.image_auto_scene.semantic_template",
             "style_profile": "paper_white",
             "fidelity": "semantic_editable_rebuild",
             "source_image": str(image_path.resolve()),
@@ -2068,7 +2068,7 @@ def build_scene(
         "version": "0.1",
         "metadata": {
             "title": title or image_path.stem,
-            "created_by": "visiomaster.image_auto_scene",
+            "created_by": "fig4visio.image_auto_scene",
             "style_profile": "paper_white",
             "fidelity": "auto_editable_draft",
             "source_image": str(image_path.resolve()),

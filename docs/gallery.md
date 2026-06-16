@@ -1,6 +1,6 @@
 # 效果示例
 
-本页展示 Visiomaster 对论文类流程框图、模型结构图和注意力模块图的复刻效果。
+本页展示 Fig4Visio 对论文类流程框图、模型结构图和注意力模块图的复刻效果。
 
 这些示例遵循同一个流程：
 
@@ -16,9 +16,9 @@
 
 ## Mask Res-block
 
-| 参考图 | Visiomaster 重建图 |
+| 参考图 | Fig4Visio 重建图 |
 | --- | --- |
-| <img src="assets/gallery/mask-res-block-reference.png" width="520"> | <img src="assets/gallery/mask-res-block-visiomaster.png" width="520"> |
+| <img src="assets/gallery/mask-res-block-reference.png" width="520"> | <img src="assets/gallery/mask-res-block-fig4visio.png" width="520"> |
 
 对应 scene 文件：
 
@@ -26,9 +26,9 @@
 
 ## Cross-attention
 
-| 参考图 | Visiomaster 重建图 |
+| 参考图 | Fig4Visio 重建图 |
 | --- | --- |
-| <img src="assets/gallery/cross-attention-reference.png" width="520"> | <img src="assets/gallery/cross-attention-visiomaster.png" width="520"> |
+| <img src="assets/gallery/cross-attention-reference.png" width="520"> | <img src="assets/gallery/cross-attention-fig4visio.png" width="520"> |
 
 对应 scene 文件：
 
@@ -36,9 +36,9 @@
 
 ## Attention Mechanism
 
-| 参考图 | Visiomaster 重建图 |
+| 参考图 | Fig4Visio 重建图 |
 | --- | --- |
-| <img src="assets/gallery/attention-mechanism-reference.png" width="520"> | <img src="assets/gallery/attention-mechanism-visiomaster.png" width="520"> |
+| <img src="assets/gallery/attention-mechanism-reference.png" width="520"> | <img src="assets/gallery/attention-mechanism-fig4visio.png" width="520"> |
 
 对应 scene 文件：
 

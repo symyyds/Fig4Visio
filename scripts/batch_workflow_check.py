@@ -131,7 +131,7 @@ def run_batch(source_dir: Path, batch_dir: Path) -> int:
                 append_log(log_path, f"{index:02d} {message}")
 
         try:
-            output = gui_app.run_visiomaster_job(image_path, log=item_log)
+            output = gui_app.run_fig4visio_job(image_path, log=item_log)
             counts = scene_counts(output.scene)
             vsdx_info = gui_app.inspect_vsdx_for_images(output.vsdx)
             self_report = load_json(output.self_check_json)

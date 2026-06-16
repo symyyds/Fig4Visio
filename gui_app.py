@@ -24,7 +24,7 @@ from tkinter.scrolledtext import ScrolledText
 from PIL import Image, ImageTk
 
 
-APP_NAME = "Visiomaster GUI"
+APP_NAME = "Fig4Visio GUI"
 MAX_PREVIEW_SIZE = (820, 560)
 SELF_CHECK_THRESHOLD = 0.34
 MAX_AUTO_ATTEMPTS = 3
@@ -76,7 +76,7 @@ def safe_stem(path: Path) -> str:
     if stem.endswith(".scene"):
         stem = stem[: -len(".scene")]
     value = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
-    return value or "visiomaster_output"
+    return value or "fig4visio_output"
 
 
 def load_script_module(name: str):
@@ -461,7 +461,7 @@ def write_quality_report(
     write_json(quality_json, report)
 
     md_lines = [
-        "# Visiomaster Quality Report",
+        "# Fig4Visio Quality Report",
         "",
         f"- 状态: {label}",
         f"- 结论: {summary}",
@@ -549,7 +549,7 @@ def run_attempt(
     }
 
 
-def run_visiomaster_job(source_path: Path, *, log) -> OutputSet:
+def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
     run_root = Path.cwd() / "work" / "gui_runs"
     run_dir = run_root / time.strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -653,7 +653,7 @@ def run_visiomaster_job(source_path: Path, *, log) -> OutputSet:
     )
 
 
-class VisiomasterGui(tk.Tk):
+class Fig4VisioGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_NAME)
@@ -682,7 +682,7 @@ class VisiomasterGui(tk.Tk):
         sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         sidebar.columnconfigure(0, weight=1)
 
-        ttk.Label(sidebar, text="Visiomaster", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(sidebar, text="Fig4Visio", font=("Segoe UI", 18, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self.file_var, wraplength=290).grid(row=1, column=0, sticky="ew", pady=(8, 14))
 
         self.process_button = ttk.Button(sidebar, text="上传图片并拆分", command=self.pick_image)
@@ -808,7 +808,7 @@ class VisiomasterGui(tk.Tk):
             except Exception:
                 pythoncom = None
             try:
-                outputs = run_visiomaster_job(self.source_path, log=log)
+                outputs = run_fig4visio_job(self.source_path, log=log)
             finally:
                 if pythoncom is not None:
                     try:
@@ -924,14 +924,14 @@ def main() -> None:
     if "--smoke" in sys.argv:
         from tempfile import TemporaryDirectory
 
-        with TemporaryDirectory(prefix="visiomaster_gui_smoke_") as temp_dir:
+        with TemporaryDirectory(prefix="fig4visio_gui_smoke_") as temp_dir:
             temp_root = Path(temp_dir)
             image_path = temp_root / "smoke.png"
             image = Image.new("RGB", (320, 180), "white")
             image.save(image_path)
-            run_visiomaster_job(image_path, log=lambda _: None)
+            run_fig4visio_job(image_path, log=lambda _: None)
         raise SystemExit(0)
-    app = VisiomasterGui()
+    app = Fig4VisioGui()
     app.mainloop()
 
 

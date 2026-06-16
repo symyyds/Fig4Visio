@@ -1,6 +1,6 @@
-# Visiomaster Workflow
+# Fig4Visio Workflow
 
-This document describes the reconstruction loop used by Visiomaster.
+This document describes the reconstruction loop used by Fig4Visio.
 
 ## Overall Flow
 

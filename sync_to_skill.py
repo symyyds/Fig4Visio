@@ -20,12 +20,12 @@ IGNORE_PATTERNS = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".git"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync the reusable visiomaster skill files from this repo to a Codex skill directory."
+        description="Sync the reusable fig4visio skill files from this repo to a Codex skill directory."
     )
     parser.add_argument(
         "--skill-dir",
-        default=str(Path.home() / ".codex" / "skills" / "visiomaster"),
-        help="Target Codex skill directory. Defaults to ~/.codex/skills/visiomaster.",
+        default=str(Path.home() / ".codex" / "skills" / "fig4visio"),
+        help="Target Codex skill directory. Defaults to ~/.codex/skills/fig4visio.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be copied without writing files.")
     parser.add_argument(

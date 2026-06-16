@@ -64,7 +64,7 @@ def build_blank_scene(args: argparse.Namespace) -> dict:
 
     metadata = {
         "title": args.title,
-        "created_by": "visiomaster.image_to_scene",
+        "created_by": "fig4visio.image_to_scene",
         "style_profile": args.style_profile,
         "fidelity": args.fidelity,
         "region_strategy": args.region_strategy,
@@ -116,7 +116,7 @@ def merge_source_metadata(scene: dict, args: argparse.Namespace) -> dict:
     assets = scene.setdefault("assets", [])
 
     metadata["title"] = args.title or metadata.get("title") or "VisioMaster Scene"
-    metadata["created_by"] = "visiomaster.image_to_scene"
+    metadata["created_by"] = "fig4visio.image_to_scene"
     metadata["style_profile"] = args.style_profile or metadata.get("style_profile") or "paper_white"
     metadata["fidelity"] = args.fidelity or metadata.get("fidelity")
     metadata["region_strategy"] = args.region_strategy or metadata.get("region_strategy")
@@ -139,7 +139,7 @@ def merge_source_metadata(scene: dict, args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a starter scene.json for visiomaster.",
+        description="Create a starter scene.json for fig4visio.",
     )
     parser.add_argument("--image", help="Optional source image path.")
     parser.add_argument("--style-ref", help="Optional style reference image path.")

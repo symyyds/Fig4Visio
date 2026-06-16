@@ -1,6 +1,6 @@
 # Full-Scene Regeneration Prompt
 
-Use this prompt after a visiomaster review round fails.
+Use this prompt after a fig4visio review round fails.
 
 ## Inputs
 
@@ -9,7 +9,7 @@ You will receive:
 1. the original source image
 2. the current replica image
 3. a structured `review_findings.json`
-4. the visiomaster scene schema and supported component vocabulary
+4. the fig4visio scene schema and supported component vocabulary
 5. optionally, the prior scene JSON as failure evidence only
 
 ## Goal

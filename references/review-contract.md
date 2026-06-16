@@ -1,6 +1,6 @@
 # Review Contract
 
-`visiomaster` review is only useful when it produces actionable visual findings. The primary reviewer inputs are always the original source image and the current replica image. Pair/crop/overlay images are optional debug aids, not default reviewer inputs.
+`fig4visio` review is only useful when it produces actionable visual findings. The primary reviewer inputs are always the original source image and the current replica image. Pair/crop/overlay images are optional debug aids, not default reviewer inputs.
 
 Use these external files for every exact-replica round:
 

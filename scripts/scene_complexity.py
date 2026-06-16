@@ -98,8 +98,8 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
             cross_region_edges += 1
 
     lines: list[str] = []
-    title = scene.get("metadata", {}).get("title", "visiomaster scene")
-    lines.append(f"# Visiomaster Complexity Report: {title}")
+    title = scene.get("metadata", {}).get("title", "fig4visio scene")
+    lines.append(f"# Fig4Visio Complexity Report: {title}")
     lines.append("")
     lines.append("## Summary")
     lines.append(f"- Style profile: `{profile_name}`")
@@ -239,7 +239,7 @@ def scene_complexity_report(scene: dict[str, Any], strict: bool = False) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a large-figure complexity report for a visiomaster scene.")
+    parser = argparse.ArgumentParser(description="Generate a large-figure complexity report for a fig4visio scene.")
     parser.add_argument("scene", help="Path to scene.json")
     parser.add_argument("--output", help="Optional markdown report path")
     parser.add_argument("--strict", action="store_true", help="Pass strict mode through to scene validation.")
