@@ -268,6 +268,46 @@ def test_cross_attention_uses_editable_template(tmp_path: Path, monkeypatch) -> 
     assert len(scene["edges"]) >= 35
 
 
+def test_attention_mechanism_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "attention_mechanism.png"
+    Image.new("RGB", (743, 354), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Attention mechanism",
+            "Sigmoid",
+            "Weighted vector",
+            "Conv1d",
+            "High-level features",
+            "AM-ResNet features",
+            "Fig. 5. The architecture of the attention mechanism.",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = {str(node.get("id")): node.get("type") for node in scene["nodes"]}
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.attention_mechanism"
+    assert scene["metadata"]["architecture_template"] == "attention_mechanism"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types["high_level_features"] == "feature_map_banded"
+    assert node_types["weighted_vector"] == "grid_matrix"
+    assert node_types["am_resnet_features"] == "feature_map_grid"
+    assert node_types["multiply_op"] == "operator_node"
+    assert "Attention mechanism" in texts
+    assert "Sigmoid" in texts
+    assert "Conv1d" in texts
+    assert "Weighted vector" in texts
+    assert "High-level features" in texts
+    assert "AM-ResNet features" in texts
+    assert "Fig. 5. The architecture of the attention mechanism." in texts
+    assert len(scene["edges"]) == 6
+
+
 def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     source = tmp_path / "source_swin.png"
     bad = tmp_path / "bad_swin.png"

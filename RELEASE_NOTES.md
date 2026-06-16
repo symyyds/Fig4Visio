@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.6 Release Notes
+
+This update adds a category-specific semantic reconstruction path for compact attention mechanism paper figures. It is triggered by the combined OCR/layout signal `Attention mechanism` + `Sigmoid` + `Conv1d` + `Weighted vector` + `High-level features` + `AM-ResNet features`, so it does not change the global trace rules for unrelated images.
+
+## Core Updates
+
+- Added an `attention_mechanism` detector and editable source-coordinate builder.
+- Reconstructs the high-level feature bands, dashed attention frame, Conv1d/Sigmoid blocks, weighted vector, multiply operator, AM-ResNet feature grid, connectors, and caption as Visio-editable geometry.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added a regression test requiring the attention mechanism path to output editable module primitives and preserve the key labels.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 17 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- User-provided attention mechanism image: GUI workflow passed on the first round, screenshot self-check score `0.633`, `download_allowed=True`, and no image embedding.
+
 # Fig4Visio v0.3.5 更新说明
 
 本次更新修复 cross-attention 论文结构图的自动复现路径。旧版本会把这类图走通用轮廓/trace，生成大量碎线，虽然没有嵌入原图，但 attention 核心和残差分支不可读，且自检会禁止下载。

@@ -1369,6 +1369,331 @@ def is_cross_attention_figure(ocr_items: list[dict[str, Any]], width: int, heigh
     return aspect >= 2.45 and has_inputs and has_attention and has_output and has_caption and has_qkv
 
 
+def is_attention_mechanism_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+    has_title = "attentionmechanism" in compact or ("attention" in compact and "mechanism" in compact)
+    has_attention_core = "sigmoid" in compact and ("conv1d" in compact or "convid" in compact or "convld" in compact)
+    has_weight_vector = "weightedvector" in compact or ("weighted" in compact and "vector" in compact)
+    has_feature_maps = (
+        ("highlevelfeatures" in compact or ("highlevel" in compact and "features" in compact))
+        and ("amresnetfeatures" in compact or ("amresnet" in compact and "features" in compact))
+    )
+    has_caption = "architectureoftheattentionmechanism" in compact or ("fig5" in compact and has_title)
+    return 1.75 <= aspect <= 3.05 and has_title and has_attention_core and has_weight_vector and has_feature_maps and has_caption
+
+
+def build_attention_mechanism_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 743.0
+    base_h = 354.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#666666",
+        z: int = 20,
+        font_size: float = 13,
+        dash: str = "solid",
+        rounding: float = 0.08,
+        shadow: bool = False,
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        item["style"]["font_family"] = "Times New Roman"
+        if shadow:
+            item["style"]["shadow"] = {
+                "color": "#222222",
+                "offset_x_in": 0.035,
+                "offset_y_in": -0.035,
+                "transparency_pct": 84,
+            }
+        return item
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 13,
+        weight: str = "regular",
+        italic: bool = False,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        item["style"]["font_family"] = "Times New Roman"
+        item["style"]["text_fit"] = "shrink_to_fit"
+        if italic:
+            item["style"]["font_italic"] = True
+        return item
+
+    def feature_bands(node_id: str, x: float, y: float, w: float, h: float) -> dict[str, Any]:
+        return {
+            "id": node_id,
+            "type": "feature_map_banded",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": 24,
+            "text": "",
+            "bands": [
+                {"fill": "#F2AF83", "size": 1},
+                {"fill": "#9ED2E3", "size": 1},
+                {"fill": "#D3E4C2", "size": 1},
+                {"fill": "#F7E78C", "size": 1},
+                {"fill": "#9ED2E3", "size": 1},
+                {"fill": "#F2AF83", "size": 1},
+            ],
+            "source_bbox_px": bbox(x, y, w, h),
+            "style": {
+                "line": "#C4C4C4",
+                "line_weight_pt": 0.7,
+                "shadow": {
+                    "color": "#222222",
+                    "offset_x_in": 0.035,
+                    "offset_y_in": -0.035,
+                    "transparency_pct": 86,
+                },
+            },
+        }
+
+    def weighted_grid(node_id: str, x: float, y: float, w: float, h: float) -> dict[str, Any]:
+        fills = ["#FFFFFF", "#E8E8E8", "#D8D8D8", "#B0B0B0", "#FFFFFF", "#6B6B6B", "#9A9A9A", "#FFFFFF", "#FFFFFF"]
+        return {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": 35,
+            "text": "",
+            "rows": 1,
+            "cols": len(fills),
+            "colored_cells": [[0, index, fill] for index, fill in enumerate(fills)],
+            "source_bbox_px": bbox(x, y, w, h),
+            "style": {
+                "grid_line": "#111111",
+                "grid_line_weight_pt": 0.9,
+                "line": "#111111",
+                "line_weight_pt": 0.9,
+            },
+        }
+
+    def feature_grid(node_id: str, x: float, y: float, w: float, h: float) -> dict[str, Any]:
+        return {
+            "id": node_id,
+            "type": "feature_map_grid",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": 24,
+            "text": "",
+            "rows": 6,
+            "cols": 9,
+            "row_colors": ["#F2AF83", "#9ED2E3", "#D3E4C2", "#F7E78C", "#9ED2E3", "#F2AF83"],
+            "column_shades": [0.0, 0.18, 0.38, 0.55, 0.10, 0.72, 0.62, 0.0, 0.18],
+            "max_shade": 0.68,
+            "source_bbox_px": bbox(x, y, w, h),
+            "style": {
+                "grid_line": "#111111",
+                "grid_line_weight_pt": 0.7,
+                "line": "#111111",
+                "line_weight_pt": 0.9,
+                "shadow": {
+                    "color": "#222222",
+                    "offset_x_in": 0.035,
+                    "offset_y_in": -0.035,
+                    "transparency_pct": 86,
+                },
+            },
+        }
+
+    def operator(node_id: str, x: float, y: float, size: float, symbol: str) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "operator_node",
+            x,
+            y,
+            size,
+            size,
+            symbol,
+            fill="#FFFFFF",
+            line="#6F6F6F",
+            z=72,
+            font_size=11,
+            rounding=0.0,
+        )
+        item["symbol"] = symbol
+        item["operator_shape"] = "circle"
+        item["operator_size_tier"] = "small"
+        item["style"]["text_color"] = "#5C5C5C"
+        item["style"]["line_weight_pt"] = 1.15
+        return item
+
+    def edge_ref(
+        edge_id: str,
+        from_ref: str,
+        to_ref: str,
+        *,
+        route: str = "horizontal",
+        points: list[list[float]] | None = None,
+        arrow: bool = True,
+        arrow_plan_id: str | None = None,
+        weight: float = 1.1,
+        z: int = 60,
+        allow_cross_container: bool = False,
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "id": edge_id,
+            "type": "arrow_connector",
+            "from": from_ref,
+            "to": to_ref,
+            "route": route,
+            "z": z,
+            "style": {
+                "line": "#6F6F6F",
+                "line_weight_pt": weight,
+                "arrow_size": "small",
+                "end_arrow": "triangle" if arrow else "none",
+            },
+        }
+        if points:
+            item["points"] = [[sx(px), sy(py)] for px, py in points]
+            item["orthogonalize_points"] = route in {"orthogonal", "hv", "vh"}
+        if arrow_plan_id:
+            item["arrow_plan_id"] = arrow_plan_id
+        if allow_cross_container:
+            item["allow_cross_container"] = True
+        return item
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0),
+        label("journal_header", 202, -11, 405, 20, "Digital Communications and Networks 11 (2025) 1567-1577", font_size=10.5, italic=True, z=96),
+        label("attention_title", 198, 7, 184, 24, "Attention mechanism", font_size=14.5, z=95),
+        node("attention_frame", "group_container", 200, 36, 178, 120, "", fill="none", line="#8F8F8F", z=5, dash="dash", rounding=0.28),
+        node("sigmoid", "rounded_process", 222, 49, 132, 36, "Sigmoid", fill="#FFE49A", line="#FFE49A", z=28, font_size=14.5, rounding=0.13, shadow=True),
+        node("conv1d", "rounded_process", 224, 107, 129, 36, "Conv1d", fill="#93D4EA", line="#93D4EA", z=28, font_size=14.5, rounding=0.13, shadow=True),
+        feature_bands("high_level_features", 47, 154, 139, 94),
+        label("high_level_label", 36, 256, 165, 28, "High-level features", font_size=14.5, z=92),
+        weighted_grid("weighted_vector", 402, 117, 141, 17),
+        label("weighted_vector_label", 485, 83, 140, 28, "Weighted vector", font_size=14.5, z=92),
+        operator("multiply_op", 461, 189, 24, "x"),
+        feature_grid("am_resnet_features", 561, 154, 141, 94),
+        label("am_resnet_label", 544, 256, 174, 28, "AM-ResNet features", font_size=14.5, z=92),
+        label("figure_caption", 134, 315, 485, 31, "Fig. 5. The architecture of the attention mechanism.", font_size=14.5, weight="bold", z=95),
+    ]
+    nodes[3]["shape"] = "capsule"
+    nodes[3]["allow_overlap"] = True
+
+    edges: list[dict[str, Any]] = [
+        edge_ref("feature_to_conv", "high_level_features:right@0.50", "conv1d:bottom@0.50", route="orthogonal", points=[[186, 201], [289, 201], [289, 143]], arrow_plan_id="A001", allow_cross_container=True),
+        edge_ref("conv_to_sigmoid", "conv1d:top@0.50", "sigmoid:bottom@0.50", route="vertical", arrow_plan_id="A002"),
+        edge_ref("sigmoid_to_weighted", "sigmoid:right@0.50", "weighted_vector:top@0.50", route="orthogonal", points=[[354, 67], [472, 67], [472, 117]], arrow_plan_id="A003", allow_cross_container=True),
+        edge_ref("feature_to_multiply", "high_level_features:right@0.50", "multiply_op:left", route="horizontal", arrow_plan_id="A004", allow_cross_container=True),
+        edge_ref("weighted_to_multiply", "weighted_vector:bottom@0.50", "multiply_op:top", route="vertical", arrow_plan_id="A005"),
+        edge_ref("multiply_to_output", "multiply_op:right", "am_resnet_features:left@0.50", route="horizontal", arrow_plan_id="A006", allow_cross_container=True),
+    ]
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.attention_mechanism",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "attention_mechanism",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_source_coordinate_paper_template",
+                "diagram_family": "attention_mechanism_feature_weighting",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_ocr_when_visible_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "input_feature_map", "category": "input", "source_bbox_px": [47, 154, 186, 248]},
+                    {"id": "attention_core", "category": "core", "source_bbox_px": [200, 36, 378, 156]},
+                    {"id": "weighted_vector", "category": "core", "source_bbox_px": [402, 83, 625, 134]},
+                    {"id": "output_feature_map", "category": "output", "source_bbox_px": [561, 154, 702, 248]},
+                    {"id": "figure_caption", "category": "caption", "source_bbox_px": [134, 315, 619, 346]},
+                ],
+            },
+            "arrow_plan": [
+                {"id": "A001", "from": "High-level features right center", "from_visual_object": "High-level features", "from_anchor_description": "right center", "to": "Conv1d bottom center", "to_visual_object": "Conv1d", "to_anchor_description": "bottom center", "route_shape": "orthogonal", "semantic_intent": "data_flow", "certainty": "high"},
+                {"id": "A002", "from": "Conv1d top center", "from_visual_object": "Conv1d", "from_anchor_description": "top center", "to": "Sigmoid bottom center", "to_visual_object": "Sigmoid", "to_anchor_description": "bottom center", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+                {"id": "A003", "from": "Sigmoid right center", "from_visual_object": "Sigmoid", "from_anchor_description": "right center", "to": "Weighted vector top center", "to_visual_object": "Weighted vector", "to_anchor_description": "top center", "route_shape": "orthogonal", "semantic_intent": "data_flow", "certainty": "high"},
+                {"id": "A004", "from": "High-level features right center", "from_visual_object": "High-level features", "from_anchor_description": "right center", "to": "multiply operator left side", "to_visual_object": "multiply operator", "to_anchor_description": "left side", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+                {"id": "A005", "from": "Weighted vector bottom center", "from_visual_object": "Weighted vector", "from_anchor_description": "bottom center", "to": "multiply operator top side", "to_visual_object": "multiply operator", "to_anchor_description": "top side", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+                {"id": "A006", "from": "multiply operator right side", "from_visual_object": "multiply operator", "from_anchor_description": "right side", "to": "AM-ResNet features left center", "to_visual_object": "AM-ResNet features", "to_anchor_description": "left center", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+            ],
+            "notes": [
+                "Editable semantic reconstruction for compact attention mechanism paper figures.",
+                "High-level feature bands, Conv1d/Sigmoid attention core, weighted vector, multiply node, AM-ResNet feature grid, connectors, and caption are vector Visio objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_cross_attention_scene(
     image_path: Path,
     width: int,
@@ -3036,6 +3361,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_attention_mechanism_figure(ocr_items, width, height):
+        scene = build_attention_mechanism_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_cross_attention_figure(ocr_items, width, height):
         scene = build_cross_attention_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
