@@ -371,6 +371,48 @@ def test_attention_mechanism_uses_editable_template(tmp_path: Path, monkeypatch)
     assert len(scene["edges"]) == 6
 
 
+def test_channel_attention_recalibration_uses_editable_shape_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "channel_attention.png"
+    Image.new("RGB", (981, 469), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Original",
+            "image",
+            "X",
+            "U",
+            "F_tr",
+            "F_sq(.)",
+            "F_ex(.,W)",
+            "F_scale(.,.)",
+            "1x1xC",
+            "1X1XC",
+            "H",
+            "C",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = [node.get("type") for node in scene["nodes"]]
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.channel_attention_recalibration"
+    assert scene["metadata"]["architecture_template"] == "channel_attention_recalibration"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types.count("cuboid_node") >= 4
+    assert node_types.count("tensor_stack") >= 2
+    assert node_types.count("feature_vector_stack") >= 4
+    assert node_types.count("feature_map_banded") >= 2
+    assert any(node.get("type") == "math_text" and "F_scale" in str(node.get("text", "")) for node in scene["nodes"])
+    assert "Original" in texts
+    assert "image" in texts
+    assert "X~" in texts
+    assert len(scene["edges"]) >= 14
+
+
 def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     source = tmp_path / "source_swin.png"
     bad = tmp_path / "bad_swin.png"

@@ -1,3 +1,22 @@
+# Fig4Visio v0.3.8 Release Notes
+
+This update adds a generalized semantic reconstruction path for channel-attention / squeeze-excitation style diagrams with 3D tensor blocks, 1x1xC channel vectors, and scale/excitation formula labels. It is triggered by combined OCR signals such as `Original image`, `F_scale`, `F_ex`, `F_sq`/similar OCR variants, `1x1xC`, and X/U tensor labels, not by filename or image hash.
+
+## Core Updates
+
+- Added `channel_attention_recalibration` detection and editable reconstruction.
+- Rebuilds two-lane channel recalibration figures with editable `cuboid_node`, `tensor_stack`, `feature_vector_stack`, `feature_map_banded`, `math_text`, and connector components.
+- Fixed a vector-cell spacing issue where a 1-pixel gap could be interpreted as a 1-inch gap during Visio rendering.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage to require semantic shape components for this category.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 19 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- User-provided channel-attention image: GUI workflow passed on the first round, screenshot self-check score `0.501`, `download_allowed=True`, and no image embedding.
+
 # Fig4Visio v0.3.7 Release Notes
 
 This update adds a generalized sparse/no-frame variant inside the Swin Transformer reconstruction category. It is not tied to a filename or single image; the selector uses OCR span plus frame-density evidence to distinguish the standard Swin paper figure from sparse Swin variants where the source lacks large dashed stage frames.

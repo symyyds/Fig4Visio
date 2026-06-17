@@ -1384,6 +1384,467 @@ def is_attention_mechanism_figure(ocr_items: list[dict[str, Any]], width: int, h
     return 1.75 <= aspect <= 3.05 and has_title and has_attention_core and has_weight_vector and has_feature_maps and has_caption
 
 
+def is_channel_attention_recalibration_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    folded = corpus.replace("\u00d7", "x").replace("*", "x")
+    compact = re.sub(r"[^a-z0-9]+", "", folded)
+    aspect = width / max(1, height)
+
+    vector_mentions = compact.count("1x1xc") + compact.count("1x1c")
+    has_scale = "fscale" in compact or ("scale" in compact and vector_mentions > 0)
+    has_excitation = "fex" in compact or "fw" in compact or "fexw" in compact
+    has_squeeze = "fsq" in compact or "fg" in compact
+    has_transfer = "ftr" in compact or ("originalimage" in compact and ("x" in compact and "u" in compact))
+    has_original = "originalimage" in compact or ("original" in compact and "image" in compact)
+    text_atoms = {re.sub(r"[^a-z0-9~]+", "", str(item.get("text", "")).lower()) for item in ocr_items}
+    has_tensor_symbols = bool({"x", "u", "h", "c"} & text_atoms)
+
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_original,
+            has_transfer,
+            has_squeeze,
+            has_excitation,
+            has_scale,
+            vector_mentions >= 1,
+            has_tensor_symbols,
+        )
+    )
+    return 1.70 <= aspect <= 3.20 and has_scale and vector_mentions >= 1 and signal_count >= 4
+
+
+def build_channel_attention_recalibration_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 981.0
+    base_h = 469.0
+    palette = ["#F15A24", "#E41A1C", "#FF7F00", "#8B1A8B", "#FF70C6", "#7B2CBF", "#F2A01F", "#F0A000"]
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def add_common(node: dict[str, Any], source: tuple[float, float, float, float], container_id: str, *, z: int | None = None) -> dict[str, Any]:
+        x, y, w, h = source
+        node["source_bbox_px"] = bbox(x, y, w, h)
+        node["container_id"] = container_id
+        if z is not None:
+            node["z"] = z
+        return node
+
+    def audit(node_id: str, x: float, y: float, w: float, h: float) -> dict[str, Any]:
+        item = px_node(node_id, "audit_region", sx(x), sy(y), sx(w), sy(h), "", fill="#FFFFFF", line="none", z=1, font_size=1, text_color="#111111")
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        item["style"].update({"fill": "none", "line": "none", "font_size_pt": 1})
+        return item
+
+    def plain_label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        container_id: str,
+        *,
+        font_size: float = 13,
+        weight: str = "regular",
+        color: str = "#111111",
+        italic: bool = False,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria", "Microsoft YaHei UI"],
+                "font_role": "math" if italic else "paper_serif",
+                "text_color": color,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 5.0,
+            }
+        )
+        if italic:
+            item["style"]["font_italic"] = True
+        return add_common(item, (x, y, w, h), container_id, z=z)
+
+    def math_label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        container_id: str,
+        *,
+        font_size: float = 13,
+        z: int = 92,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "math_text",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": text,
+            "font_size_pt": font_size,
+            "math_render_mode": "fragments",
+            "style": {
+                "fill": "none",
+                "line": "none",
+                "text_color": "#111111",
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria"],
+                "font_role": "math",
+                "font_italic": True,
+                "font_size_pt": font_size,
+                "min_font_size_pt": 5.0,
+                "text_fit": "math_label",
+                "text_margin_in": 0.0,
+            },
+        }
+        return add_common(item, (x, y, w, h), container_id, z=z)
+
+    def cuboid(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        container_id: str,
+        *,
+        depth_x: float = 30,
+        depth_y: float = -30,
+        fill: str = "#FFFFFF",
+        side_fill: str = "#F6F6F6",
+        top_fill: str = "#FFFFFF",
+        z: int = 26,
+    ) -> dict[str, Any]:
+        item = px_node(node_id, "cuboid_node", sx(x), sy(y), sx(w), sy(h), text, fill=fill, line="#111111", z=z, font_size=14, text_color="#111111")
+        item["depth_x_in"] = sx(depth_x)
+        item["depth_y_in"] = sy(depth_y)
+        item["style"].update(
+            {
+                "fill": fill,
+                "side_fill": side_fill,
+                "top_fill": top_fill,
+                "line": "#111111",
+                "line_weight_pt": 1.1,
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria"],
+                "font_role": "math",
+                "font_italic": True,
+                "font_size_pt": 14,
+                "text_fit": "single_line",
+            }
+        )
+        return add_common(item, (x, y + depth_y, w + depth_x, h - depth_y), container_id, z=z)
+
+    def vector_stack(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        container_id: str,
+        *,
+        fills: list[str] | None = None,
+        count: int = 9,
+        label: str = "1x1xC",
+        z: int = 48,
+    ) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "id": node_id,
+            "type": "feature_vector_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "orientation": "horizontal",
+            "count": count,
+            "cell_gap_in": 1.2,
+            "cell_fills": fills or ["#FFFFFF"] * count,
+            "label": label,
+            "label_side": "bottom",
+            "label_gap_in": sy(2.0),
+            "label_w_in": sx(58.0),
+            "label_h_in": sy(15.0),
+            "label_font_size_pt": 8.5,
+            "label_text_fit": "single_line",
+            "style": {
+                "fill": "#FFFFFF",
+                "cell_fill": "#FFFFFF",
+                "cell_line": "#111111",
+                "line": "#111111",
+                "line_weight_pt": 0.8,
+                "cell_line_weight_pt": 0.8,
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria"],
+                "font_role": "math",
+                "font_size_pt": 8.5,
+                "cell_font_size_pt": 7.5,
+                "cell_text_fit": "single_line",
+                "text_margin_in": 0.0,
+            },
+        }
+        return add_common(item, (x, y, w, h + 18), container_id, z=z)
+
+    def tensor_output(
+        prefix: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        container_id: str,
+        *,
+        depth_x: float = 38,
+        depth_y: float = -32,
+        z: int = 32,
+    ) -> list[dict[str, Any]]:
+        tensor = {
+            "id": f"{prefix}_tensor_core",
+            "type": "tensor_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "layers": 1,
+            "stack_render_mode": "feature_cuboids",
+            "depth_x_in": sx(depth_x),
+            "depth_y_in": sy(depth_y),
+            "style": {
+                "fill": "#F39C12",
+                "side_fill": "#D07B00",
+                "top_fill": "#FDBA3B",
+                "line": "#111111",
+                "line_weight_pt": 1.05,
+            },
+            "allow_overlap": True,
+        }
+        front = {
+            "id": f"{prefix}_channel_bands",
+            "type": "feature_map_banded",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z + 10,
+            "text": "",
+            "orientation": "vertical",
+            "bands": [{"fill": color, "size": 1} for color in palette],
+            "separator_count": len(palette) - 1,
+            "style": {
+                "fill": "none",
+                "line": "#111111",
+                "line_weight_pt": 1.05,
+                "separator_line": "#111111",
+                "separator_line_weight_pt": 0.8,
+            },
+            "allow_overlap": True,
+        }
+        return [
+            add_common(tensor, (x, y + depth_y, w + depth_x, h - depth_y), container_id, z=z),
+            add_common(front, (x, y, w, h), container_id, z=z + 10),
+        ]
+
+    def arrow(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "horizontal",
+        points: list[list[float]] | None = None,
+        arrowhead: bool = True,
+        allow_diagonal: bool = False,
+        arrow_plan_id: str | None = None,
+        z: int = 66,
+    ) -> dict[str, Any]:
+        edge: dict[str, Any] = {
+            "id": edge_id,
+            "type": "lane_arrow" if route in {"horizontal", "vertical"} and arrowhead else ("arrow_connector" if arrowhead else "line_segment"),
+            "from_point": [sx(x1), sy(y1)],
+            "to_point": [sx(x2), sy(y2)],
+            "route": route,
+            "z": z,
+            "style": {
+                "line": "#111111",
+                "line_weight_pt": 1.1,
+                "end_arrow": "triangle" if arrowhead else "none",
+                "arrow_size": "small",
+            },
+        }
+        if points:
+            edge["points"] = [[sx(px), sy(py)] for px, py in points]
+            edge["orthogonalize_points"] = route in {"orthogonal", "hv", "vh"}
+        if allow_diagonal:
+            edge["allow_diagonal"] = True
+        if arrow_plan_id:
+            edge["arrow_plan_id"] = arrow_plan_id
+        return edge
+
+    nodes: list[dict[str, Any]] = [
+        px_node("page_background", "page_background", 0, 0, width, height, "", fill="#FFFFFF", line="none", z=0),
+        audit("top_channel_attention_lane", 0, 20, 955, 175),
+        audit("bottom_channel_attention_lane", 45, 255, 920, 190),
+        plain_label("original_word", 0, 88, 104, 30, "Original", "top_channel_attention_lane", font_size=20, weight="bold", color="#79CFD0"),
+        plain_label("image_word", 9, 121, 82, 31, "image", "top_channel_attention_lane", font_size=20, weight="bold", color="#79CFD0"),
+    ]
+
+    def add_pipeline(prefix: str, y_offset: float, *, with_original_arrow: bool) -> None:
+        container = f"{prefix}_channel_attention_lane"
+        if prefix == "top":
+            x1, y1, x2, y2, vector_y, colored_y, out_x, out_y = 199, 92, 365, 99, 52, 53, 801, 103
+            input_depth = (28, -28)
+            u_depth = (26, -29)
+            input_size = (55, 74)
+            u_size = (62, 64)
+            output_size = (64, 64)
+            output_depth = (35, -31)
+            arrow_y = 128
+        else:
+            x1, y1, x2, y2, vector_y, colored_y, out_x, out_y = 126, 345, 310, 345, 294, 294, 813, 346
+            input_depth = (34, -33)
+            u_depth = (36, -33)
+            input_size = (56, 82)
+            u_size = (62, 82)
+            output_size = (73, 82)
+            output_depth = (48, -35)
+            arrow_y = 386
+
+        nodes.extend(
+            [
+                cuboid(f"{prefix}_input_x", x1, y1, input_size[0], input_size[1], "H'", container, depth_x=input_depth[0], depth_y=input_depth[1], z=26),
+                plain_label(f"{prefix}_x_label", x1 + input_size[0] * 0.72, y1 + input_depth[1] - 19, 30, 18, "X", container, font_size=13, weight="bold", italic=True),
+                plain_label(f"{prefix}_input_c_label", x1 + input_size[0] * 0.40, y1 + input_size[1] + 5, 35, 18, "C'", container, font_size=12, italic=True),
+                plain_label(f"{prefix}_input_w_label", x1 + input_size[0] + input_depth[0] - 9, y1 + 40, 28, 18, "W'", container, font_size=12, italic=True),
+                cuboid(f"{prefix}_feature_u", x2, y2, u_size[0], u_size[1], "H", container, depth_x=u_depth[0], depth_y=u_depth[1], z=27),
+                plain_label(f"{prefix}_u_label", x2 + u_size[0] * 0.72, y2 + u_depth[1] - 17, 28, 18, "U", container, font_size=13, weight="bold", italic=True),
+                plain_label(f"{prefix}_u_c_label", x2 + u_size[0] * 0.42, y2 + u_size[1] + 6, 28, 18, "C", container, font_size=12, italic=True),
+                plain_label(f"{prefix}_u_w_label", x2 + u_size[0] + u_depth[0] - 9, y2 + 36, 24, 18, "W", container, font_size=12, italic=True),
+                vector_stack(f"{prefix}_squeezed_vector", 535 if prefix == "top" else 495, vector_y, 46 if prefix == "top" else 76, 13 if prefix == "top" else 16, container, fills=None, count=9 if prefix == "top" else 10, z=49),
+                vector_stack(f"{prefix}_excited_vector", 660 if prefix == "top" else 670, colored_y, 51 if prefix == "top" else 57, 15 if prefix == "top" else 16, container, fills=palette, count=8, z=50),
+            ]
+        )
+        nodes.extend(tensor_output(f"{prefix}_output", out_x, out_y, output_size[0], output_size[1], container, depth_x=output_depth[0], depth_y=output_depth[1], z=33))
+        nodes.extend(
+            [
+                plain_label(f"{prefix}_xtilde_label", out_x + output_size[0] * 0.72, out_y + output_depth[1] - 16, 35, 18, "X~", container, font_size=13, weight="bold", italic=True),
+                plain_label(f"{prefix}_output_h_label", out_x + output_size[0] + output_depth[0] + 8, out_y + 16, 25, 22, "H", container, font_size=13, italic=True),
+                plain_label(f"{prefix}_output_c_label", out_x + output_size[0] * 0.52, out_y + output_size[1] + 7, 25, 18, "C", container, font_size=12, italic=True),
+                plain_label(f"{prefix}_output_w_label", out_x + output_size[0] + output_depth[0] - 8, out_y + output_size[1] - 4, 25, 18, "W", container, font_size=12, italic=True),
+                math_label(f"{prefix}_ftr_label", (x1 + input_size[0] + input_depth[0] + x2 - 20) / 2, arrow_y - 23, 60, 22, "F_tr", container, font_size=13),
+                math_label(f"{prefix}_fsq_label", x2 + u_size[0] + 18, vector_y - 15, 66, 20, "F_sq(.)", container, font_size=12),
+                math_label(f"{prefix}_fex_label", (535 if prefix == "top" else 495) + 90, vector_y - 29, 108, 22, "F_ex(., W)", container, font_size=12),
+                math_label(f"{prefix}_fscale_label", 710 if prefix == "top" else 728, arrow_y - 28, 105, 24, "F_scale(., .)", container, font_size=12),
+            ]
+        )
+
+        if with_original_arrow:
+            edges.append(arrow(f"{prefix}_original_to_x", 165, arrow_y, x1 - 1, arrow_y, route="horizontal", arrow_plan_id=f"{prefix}_A001"))
+        else:
+            edges.append(arrow(f"{prefix}_input_arrow", 82, arrow_y, x1 - 1, arrow_y, route="horizontal", arrow_plan_id=f"{prefix}_A001"))
+        edges.extend(
+            [
+                arrow(f"{prefix}_x_to_u", x1 + input_size[0] + input_depth[0] + 3, arrow_y, x2 - 2, arrow_y, route="horizontal", arrow_plan_id=f"{prefix}_A002"),
+                arrow(f"{prefix}_u_to_output_main", x2 + u_size[0] + u_depth[0] + 2, arrow_y, out_x - 3, arrow_y, route="horizontal", arrow_plan_id=f"{prefix}_A003"),
+                arrow(f"{prefix}_u_to_squeeze", x2 + u_size[0] + u_depth[0] - 2, y2 + 5, (535 if prefix == "top" else 495) - 4, vector_y + 7, route="straight", allow_diagonal=True, arrow_plan_id=f"{prefix}_A004"),
+                arrow(f"{prefix}_squeeze_to_excite", (535 if prefix == "top" else 495) + (46 if prefix == "top" else 76) + 4, vector_y + 7, (660 if prefix == "top" else 670) - 4, colored_y + 7, route="horizontal", arrow_plan_id=f"{prefix}_A005"),
+                arrow(f"{prefix}_excite_to_scale", (660 if prefix == "top" else 670) + (51 if prefix == "top" else 57) + 3, colored_y + 8, out_x - 2, out_y + 4, route="straight", allow_diagonal=True, arrow_plan_id=f"{prefix}_A006"),
+                arrow(f"{prefix}_output_to_right", out_x + output_size[0] + output_depth[0] + 2, arrow_y, min(960, out_x + output_size[0] + output_depth[0] + 44), arrow_y, route="horizontal", arrow_plan_id=f"{prefix}_A007"),
+            ]
+        )
+
+    edges: list[dict[str, Any]] = []
+    add_pipeline("top", 0, with_original_arrow=True)
+    add_pipeline("bottom", 235, with_original_arrow=False)
+
+    arrow_plan = []
+    for prefix in ("top", "bottom"):
+        lane_name = "upper recalibration lane" if prefix == "top" else "lower recalibration lane"
+        arrow_plan.extend(
+            [
+                {"id": f"{prefix}_A001", "from_visual_object": "input arrow", "from_anchor_description": "left side", "to_visual_object": "X tensor", "to_anchor_description": "left face", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A002", "from_visual_object": "X tensor", "from_anchor_description": "right side", "to_visual_object": "U tensor", "to_anchor_description": "left face", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A003", "from_visual_object": "U tensor", "from_anchor_description": "right side", "to_visual_object": "scaled output tensor", "to_anchor_description": "left face", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A004", "from_visual_object": "U tensor", "from_anchor_description": "upper-right corner", "to_visual_object": "1x1xC squeezed vector", "to_anchor_description": "left side", "route_shape": "straight_diagonal", "semantic_intent": "squeeze", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A005", "from_visual_object": "squeezed vector", "from_anchor_description": "right side", "to_visual_object": "excited channel vector", "to_anchor_description": "left side", "route_shape": "straight_horizontal", "semantic_intent": "excitation", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A006", "from_visual_object": "excited channel vector", "from_anchor_description": "right side", "to_visual_object": "scaled output tensor", "to_anchor_description": "upper-left face", "route_shape": "straight_diagonal", "semantic_intent": "scale_weights", "certainty": "high", "lane": lane_name},
+                {"id": f"{prefix}_A007", "from_visual_object": "scaled output tensor", "from_anchor_description": "right side", "to_visual_object": "output arrow", "to_anchor_description": "right side", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high", "lane": lane_name},
+            ]
+        )
+    for plan in arrow_plan:
+        plan.setdefault("from", f"{plan.get('from_visual_object', '')} {plan.get('from_anchor_description', '')}".strip())
+        plan.setdefault("to", f"{plan.get('to_visual_object', '')} {plan.get('to_anchor_description', '')}".strip())
+        if plan.get("route_shape") == "straight_diagonal":
+            plan["route_shape"] = "short_diagonal"
+        if plan.get("semantic_intent") in {"squeeze", "excitation", "scale_weights"}:
+            plan["semantic_intent"] = "data_flow"
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.channel_attention_recalibration",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "channel_attention_recalibration",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_formula_and_tensor_motif_triggered_channel_attention_template",
+                "diagram_family": "channel_attention_squeeze_excitation_recalibration",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_visible_formula_family_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "top_channel_attention_lane", "category": "upper_pipeline", "source_bbox_px": [0, 20, 955, 195], "required_visible_labels": ["Original image", "X", "U", "F_tr", "F_sq", "F_ex", "F_scale", "1x1xC", "X~"]},
+                    {"id": "bottom_channel_attention_lane", "category": "lower_pipeline", "source_bbox_px": [45, 255, 965, 445], "required_visible_labels": ["X", "U", "F_tr", "F_sq", "F_ex", "F_scale", "1x1xC", "X~"]},
+                ],
+            },
+            "region_plan": [
+                {"id": "top_channel_attention_lane", "category": "upper_pipeline", "source_bbox_px": [0, 20, 955, 195]},
+                {"id": "bottom_channel_attention_lane", "category": "lower_pipeline", "source_bbox_px": [45, 255, 965, 445]},
+            ],
+            "arrow_plan": arrow_plan,
+            "notes": [
+                "Editable semantic reconstruction for channel-attention or squeeze-excitation recalibration diagrams.",
+                "3D feature tensors are cuboid/tensor components; 1x1xC rows are feature_vector_stack components; output channel faces are editable colored bands.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_attention_mechanism_scene(
     image_path: Path,
     width: int,
@@ -3620,6 +4081,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_channel_attention_recalibration_figure(ocr_items, width, height):
+        scene = build_channel_attention_recalibration_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_attention_mechanism_figure(ocr_items, width, height):
         scene = build_attention_mechanism_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
