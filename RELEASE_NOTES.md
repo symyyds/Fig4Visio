@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.10 Release Notes
+
+This update adds a generalized semantic reconstruction path for remote-sensing RSEI workflow diagrams with data-source lanes, driver layers, GEE-based RSEI extraction, PLS-SEM path modeling, spatial auto-correlation panels, and RSEI change analysis. The selector uses combined OCR signals such as `RSEI`, `NDVI`, `NDSI`, `WET`, `LST`, `PLS-SEM`, `Landsat`, `Water Mask`, `Driver Layer`, and `Global spatial auto-correlation`; it is not tied to a filename or image hash.
+
+## Core Updates
+
+- Added `remote_sensing_rsei_workflow` detection and editable reconstruction.
+- Rebuilds source image stacks, JRC water layer motif, terrain/climate/soil/urbanization icon modules, pre-processing/extracting lanes, RSEI index/PCA/map modules, PLS-SEM latent path model, spatial auto-correlation panels, and major connectors as Visio-editable objects.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage requiring semantic editable components including dashed regions, tensor stacks, feature/grid maps, polygons, SEM ellipses, rounded RSEI blocks, key labels, and no raster embedding.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 21 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `dist\Fig4VisioGUI.exe --smoke`: passed
+- User-provided RSEI workflow image: GUI workflow passed on the first round, screenshot self-check score `0.633`, `download_allowed=True`, and no image embedding (`assets=0`, `image_tiles=0`).
+
 # Fig4Visio v0.3.9 Release Notes
 
 This update adds a generalized semantic reconstruction path for wide two-row deformable Transformer encoder/decoder paper diagrams. The selector uses combined OCR signals such as `Encoder`, `Decoder`, `Multi-Head Deformable`, `Self-Attention`, `Cross-Attention`, `BC-FFN`, `GN`, `GELU`, `Feature Grids`, `Restore`, `Flatten`, and `Location-guided queries`; it is not tied to a filename or image hash.

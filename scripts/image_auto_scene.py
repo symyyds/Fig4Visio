@@ -1343,6 +1343,53 @@ def contains_keywords(ocr_items: list[dict[str, Any]], keywords: list[str]) -> b
     return all(keyword.lower() in corpus for keyword in keywords)
 
 
+def is_remote_sensing_rsei_workflow_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+
+    has_rsei = "rsei" in compact or "rsel" in compact
+    rsei_index_count = sum(token in compact for token in ("ndvi", "ndsi", "wet", "lst"))
+    has_pls_sem = "plssem" in compact or ("pls" in compact and "sem" in compact)
+    has_remote_inputs = (
+        "landsat" in compact
+        or "surfacereflectance" in compact
+        or "jrcglobalsurfacewater" in compact
+        or ("global" in compact and "surfacewater" in compact)
+    )
+    has_driver_layer = (
+        "driverlayer" in compact
+        or sum(token in compact for token in ("terrain", "climate", "soil", "urbanization")) >= 3
+    )
+    has_preprocess = (
+        "preprocessing" in compact
+        or "preprocessing" in corpus.replace("-", "")
+        or "ledaps" in compact
+        or "lasrc" in compact
+        or "cfmask" in compact
+        or "watermask" in compact
+    )
+    has_gee_extraction = "gee" in compact or "normalizationpca" in compact or "multiyearrsei" in compact
+    has_spatial_auto = "globalspatialautocorrelation" in compact or "autocorrelation" in compact
+    has_change = "rseichangeanalysis" in compact or ("change" in compact and has_rsei)
+
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_rsei,
+            rsei_index_count >= 3,
+            has_pls_sem,
+            has_remote_inputs,
+            has_driver_layer,
+            has_preprocess,
+            has_gee_extraction,
+            has_spatial_auto,
+            has_change,
+        )
+    )
+    return 1.40 <= aspect <= 2.25 and has_rsei and rsei_index_count >= 3 and has_pls_sem and signal_count >= 6
+
+
 def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
     corpus = ocr_corpus(ocr_items).lower()
     compact = re.sub(r"[^a-z0-9]+", "", corpus)
@@ -4511,6 +4558,668 @@ def build_speck_drt_fkv_scene(image_path: Path, width: int, height: int, ocr_ite
     }
 
 
+def build_remote_sensing_rsei_workflow_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 1080.0
+    base_h = 614.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def attach(item: dict[str, Any], x: float, y: float, w: float, h: float, container_id: str | None = None) -> dict[str, Any]:
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        if container_id:
+            item["container_id"] = container_id
+        item.setdefault("allow_overlap", True)
+        return item
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#111111",
+        z: int = 20,
+        font_size: float = 10,
+        dash: str = "solid",
+        rounding: float = 0.03,
+        container_id: str | None = None,
+        weight: str = "regular",
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Cambria", "Arial", "Microsoft YaHei UI"],
+                "font_role": "paper_serif",
+                "font_weight": weight,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.5,
+                "text_margin_in": 0.02,
+                "line_weight_pt": 1.0,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 10,
+        weight: str = "regular",
+        container_id: str | None = None,
+        z: int = 90,
+        color: str = "#111111",
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Cambria", "Arial", "Microsoft YaHei UI"],
+                "font_role": "paper_serif",
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.3,
+                "text_color": color,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def frame(node_id: str, x: float, y: float, w: float, h: float, *, dashed: bool = True, z: int = 4) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "dashed_region" if dashed else "group_container",
+            x,
+            y,
+            w,
+            h,
+            "",
+            fill="none",
+            line="#111111",
+            dash="dash" if dashed else "solid",
+            z=z,
+            font_size=1,
+            rounding=0.0,
+        )
+        item["style"].update({"line_weight_pt": 1.2, "fill": "none"})
+        return item
+
+    def header(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        container_id: str | None = None,
+        font_size: float = 15,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "process_box",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill="#FFF2C7",
+            line="#111111",
+            z=18,
+            font_size=font_size,
+            container_id=container_id,
+            weight="bold",
+            rounding=0.0,
+        )
+        item["style"].update({"line_weight_pt": 1.1, "text_fit": "single_line"})
+        return item
+
+    def rounded(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        fill: str = "#F5F5F5",
+        line: str = "#111111",
+        font_size: float = 10,
+        container_id: str | None = None,
+        z: int = 28,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "rounded_process",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.07,
+            container_id=container_id,
+        )
+        item["style"]["line_weight_pt"] = 1.1
+        return item
+
+    def stack(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        fill: str = "#5E9F78",
+        container_id: str | None = None,
+        layers: int = 7,
+        z: int = 25,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "tensor_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "layers": layers,
+            "stack_render_mode": "thin_feature_slabs",
+            "style": {
+                "fill": fill,
+                "top_fill": "#D8E9CF",
+                "side_fill": "#7A927F",
+                "line": "#333333",
+                "line_weight_pt": 0.6,
+                "layer_dx_in": sx(-3.0),
+                "layer_dy_in": sy(1.7),
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def grid(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        rows: int = 5,
+        cols: int = 7,
+        colors: tuple[str, str] = ("#B7D987", "#F3D66B"),
+        container_id: str | None = None,
+        z: int = 26,
+    ) -> dict[str, Any]:
+        cells = [[row, col, colors[(row + col * 2) % len(colors)]] for row in range(rows) for col in range(cols)]
+        item = {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "rows": rows,
+            "cols": cols,
+            "colored_cells": cells,
+            "style": {
+                "line": "#6D8F6D",
+                "line_weight_pt": 0.5,
+                "grid_line": "#D9E6CC",
+                "grid_line_weight_pt": 0.25,
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def feature_grid(node_id: str, x: float, y: float, w: float, h: float, *, container_id: str | None = None, z: int = 26) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "feature_map_grid",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "rows": 5,
+            "cols": 7,
+            "row_colors": ["#A8D8E9", "#66B5C9", "#39A4BD", "#79C6D8", "#BDE9EF"],
+            "column_shades": [0.10, 0.32, 0.55, 0.15, 0.44, 0.70, 0.24],
+            "style": {"line": "#277D99", "grid_line": "#D8F0F5", "grid_line_weight_pt": 0.25, "line_weight_pt": 0.6},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def polygon(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        points: list[list[float]],
+        *,
+        fill: str,
+        line: str = "#5B9C66",
+        container_id: str | None = None,
+        z: int = 40,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "polygon_node",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "points": points,
+            "style": {"fill": fill, "line": line, "line_weight_pt": 0.7},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def ellipse(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#111111",
+        font_size: float = 8.5,
+        container_id: str | None = None,
+        z: int = 38,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "ellipse_node",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.0,
+            container_id=container_id,
+        )
+        item["style"]["text_fit"] = "shrink_to_fit"
+        return item
+
+    def edge(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        arrow: bool = True,
+        dash: str = "solid",
+        color: str = "#111111",
+        weight: float = 1.05,
+        z: int = 70,
+        allow_diagonal: bool = False,
+        arrow_plan_id: str | None = None,
+    ) -> dict[str, Any]:
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=arrow,
+            route=route,
+            points=[[sx(px), sy(py)] for px, py in points] if points else None,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"].update({"line": color, "line_dash": dash, "line_weight_pt": weight, "arrow_size": "small"})
+        if route in {"horizontal", "vertical"} and arrow:
+            item["type"] = "lane_arrow"
+        if allow_diagonal:
+            item["allow_diagonal"] = True
+        if arrow_plan_id:
+            item["arrow_plan_id"] = arrow_plan_id
+        return item
+
+    def map_blob(prefix: str, x: float, y: float, w: float, h: float, container_id: str) -> list[dict[str, Any]]:
+        return [
+            polygon(
+                f"{prefix}_map_blob",
+                x,
+                y,
+                w,
+                h,
+                [[0.06, 0.50], [0.16, 0.28], [0.34, 0.18], [0.53, 0.27], [0.72, 0.14], [0.91, 0.37], [0.84, 0.66], [0.64, 0.80], [0.43, 0.72], [0.22, 0.84]],
+                fill="#A9D685",
+                line="#7AAD61",
+                container_id=container_id,
+                z=42,
+            ),
+            polygon(
+                f"{prefix}_map_patch",
+                x + w * 0.22,
+                y + h * 0.26,
+                w * 0.46,
+                h * 0.38,
+                [[0.10, 0.44], [0.38, 0.18], [0.80, 0.35], [0.70, 0.78], [0.26, 0.84]],
+                fill="#E1C66B",
+                line="#D8B84B",
+                container_id=container_id,
+                z=43,
+            ),
+            ellipse(f"{prefix}_hotspot", x + w * 0.60, y + h * 0.42, w * 0.10, h * 0.10, "", fill="#D88A4B", line="#D88A4B", container_id=container_id, z=44),
+        ]
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0),
+        frame("outer_border", 29, 14, 1030, 588, dashed=False, z=2),
+    ]
+    edges: list[dict[str, Any]] = []
+
+    nodes.extend(
+        [
+            frame("images_data_region", 31, 16, 474, 147, dashed=True),
+            header("images_data_header", 31, 18, 474, 23, "Images data", container_id="images_data_region", font_size=14.5),
+            frame("driver_layer_region", 512, 16, 545, 147, dashed=True),
+            header("driver_layer_header", 512, 18, 545, 23, "Driver Layer", container_id="driver_layer_region", font_size=14.5),
+        ]
+    )
+    for index, x in enumerate((193, 352), start=1):
+        edges.append(edge(f"images_sep_{index}", x, 41, x, 163, route="vertical", arrow=False, dash="dash", weight=1.0, z=16))
+
+    image_sources = [
+        ("landsat5", 45, 47, 135, "Landsat 5 TM\nSurface Reflectance images", "#50785F"),
+        ("landsat8", 214, 47, 125, "Landsat 8 OLI\nSurface Reflectance images", "#52795C"),
+        ("jrc_water", 363, 47, 126, "JRC Global Surface Water\nMapping Layers", "#7A70C9"),
+    ]
+    for source_id, x, y, w, text, fill in image_sources:
+        nodes.append(label(f"{source_id}_label", x - 2, y, w + 18, 34, text, font_size=9.2, container_id="images_data_region"))
+        if source_id == "jrc_water":
+            nodes.append(
+                polygon(
+                    "jrc_water_shape",
+                    x + 43,
+                    y + 51,
+                    55,
+                    52,
+                    [[0.19, 0.32], [0.47, 0.15], [0.78, 0.22], [0.88, 0.56], [0.62, 0.82], [0.31, 0.71]],
+                    fill="#7D6BCE",
+                    line="#6754B8",
+                    container_id="images_data_region",
+                )
+            )
+            nodes.append(ellipse("jrc_water_dot", x + 62, y + 66, 19, 19, "", fill="#E6DBFF", line="#7D6BCE", container_id="images_data_region", z=45))
+        else:
+            nodes.append(stack(f"{source_id}_stack", x + 34, y + 50, 76, 49, fill=fill, container_id="images_data_region"))
+    nodes.append(label("images_year_note", 131, 156, 113, 10, "From 2000,2005,2010,2015,2020", font_size=5.2, container_id="images_data_region"))
+
+    drivers = [
+        ("terrain", 531, 51, "Terrain"),
+        ("climate", 667, 51, "Climate"),
+        ("soil", 805, 51, "Soil"),
+        ("urban", 943, 51, "Urbanization"),
+    ]
+    for driver_id, x, y, text in drivers:
+        nodes.append(rounded(f"{driver_id}_tile_bg", x, y, 101, 103, "", fill="#FFF2CE", line="#FFF2CE", container_id="driver_layer_region", z=19))
+        nodes.append(label(f"{driver_id}_label", x + 13, y - 3, 78, 22, text, font_size=10.5, container_id="driver_layer_region"))
+    nodes.extend(
+        [
+            feature_grid("terrain_grid", 543, 80, 82, 50, container_id="driver_layer_region", z=26),
+            polygon("terrain_outline", 539, 76, 87, 59, [[0.03, 0.72], [0.20, 0.32], [0.45, 0.18], [0.81, 0.26], [0.96, 0.66], [0.62, 0.79], [0.26, 0.86]], fill="none", line="#222222", container_id="driver_layer_region", z=46),
+            ellipse("climate_sun", 680, 81, 47, 47, "", fill="#F6C247", line="#E09A20", container_id="driver_layer_region", z=32),
+            ellipse("climate_cloud_1", 712, 100, 52, 29, "", fill="#BFE6F3", line="#75B9D4", container_id="driver_layer_region", z=40),
+            ellipse("climate_cloud_2", 696, 105, 42, 25, "", fill="#D8F0F7", line="#75B9D4", container_id="driver_layer_region", z=41),
+            node("soil_layer_top", "process_box", 811, 81, 92, 17, "", fill="#9CD173", line="#5F8D3E", z=29, container_id="driver_layer_region", rounding=0.0),
+            node("soil_layer_mid", "process_box", 811, 98, 92, 26, "", fill="#9B6237", line="#6F4324", z=29, container_id="driver_layer_region", rounding=0.0),
+            node("soil_layer_bottom", "process_box", 811, 124, 92, 16, "", fill="#D5B187", line="#8F6B43", z=29, container_id="driver_layer_region", rounding=0.0),
+            node("urban_sky", "process_box", 951, 80, 86, 58, "", fill="#103B78", line="#103B78", z=24, container_id="driver_layer_region", rounding=0.0),
+        ]
+    )
+    for index, (x, y, w, h, fill) in enumerate(
+        [
+            (956, 102, 9, 35, "#7BA8D8"),
+            (970, 91, 13, 46, "#A7CAE5"),
+            (987, 108, 11, 29, "#4F84C2"),
+            (1003, 86, 15, 51, "#D0E5F5"),
+            (1023, 98, 10, 39, "#6B9FD4"),
+        ]
+    ):
+        nodes.append(node(f"urban_building_{index}", "process_box", x, y, w, h, "", fill=fill, line=fill, z=34, container_id="driver_layer_region", rounding=0.0))
+
+    nodes.extend(
+        [
+            frame("pre_processing_region", 33, 192, 320, 63, dashed=True),
+            header("pre_processing_header", 33, 192, 320, 24, "Pre-processing", container_id="pre_processing_region", font_size=13.5),
+            frame("extracting_region", 356, 192, 148, 63, dashed=True),
+            header("extracting_header", 356, 192, 148, 24, "Extracting", container_id="extracting_region", font_size=13.5),
+        ]
+    )
+    for index, (x, text) in enumerate([(50, "LEDAPS"), (143, "LaSRC"), (221, "CFMASK"), (310, "Mosaic")]):
+        nodes.append(label(f"preproc_step_{index}", x - 15, 228, 68, 20, text, font_size=8.6, container_id="pre_processing_region"))
+    nodes.append(label("extract_water_mask", 398, 228, 78, 20, "Water Mask", font_size=8.6, container_id="extracting_region"))
+
+    for plan_id, edge_id, x in [("A001", "landsat5_to_preproc", 111), ("A002", "landsat8_to_preproc", 275), ("A003", "jrc_to_extract", 430)]:
+        edges.append(edge(edge_id, x, 163, x, 192, route="vertical", points=[[x, 174], [x, 181]], weight=1.4, arrow_plan_id=plan_id))
+    edges.append(edge("preproc_to_rsei", 191, 255, 191, 282, route="vertical", points=[[191, 265], [191, 274]], weight=1.4, arrow_plan_id="A004"))
+    edges.append(edge("extract_to_rsei", 430, 255, 430, 282, route="vertical", points=[[430, 265], [430, 274]], weight=1.4, arrow_plan_id="A005"))
+    edges.append(edge("driver_to_pls", 784, 163, 784, 192, route="vertical", points=[[784, 174], [784, 183]], weight=1.4, arrow_plan_id="A006"))
+
+    nodes.extend(
+        [
+            frame("rsei_region", 32, 282, 472, 258, dashed=True),
+            header("rsei_header", 33, 282, 470, 24, "RSEI information extraction by GEE", container_id="rsei_region", font_size=13.5),
+        ]
+    )
+    indices = [("ndvi", 43, "NDVI"), ("ndsi", 166, "NDSI"), ("wet", 291, "WET"), ("lst", 417, "LST")]
+    for item_id, x, text in indices:
+        nodes.append(rounded(f"{item_id}_box", x, 313, 79, 41, text, fill="#F3F3F3", line="#111111", font_size=9.5, container_id="rsei_region"))
+        edges.append(edge(f"{item_id}_down", x + 39.5, 354, x + 39.5, 372, route="vertical", arrow=False, weight=1.0))
+    edges.append(edge("index_join_line", 82, 372, 456, 372, route="horizontal", arrow=False, weight=1.0))
+    edges.append(edge("index_join_to_pca", 268, 372, 268, 388, route="vertical", arrow=False, weight=1.0))
+    nodes.append(node("normalization_pca", "process_box", 42, 388, 453, 29, "Normalization, PCA", fill="#F5F5F5", line="#111111", z=24, font_size=11, container_id="rsei_region", rounding=0.0))
+    edges.append(edge("pca_to_maps", 268, 417, 268, 432, route="vertical", weight=1.0))
+    nodes.append(label("maps_title", 206, 442, 124, 22, "Multi-year RSEI maps", font_size=10.5, container_id="rsei_region"))
+    for index, x in enumerate([48, 128, 207, 286, 365, 435]):
+        nodes.extend(map_blob(f"rsei_map_{index}", x, 457, 62, 48, "rsei_region"))
+    edges.append(edge("maps_to_change", 268, 540, 268, 568, route="vertical", points=[[268, 550], [268, 559]], weight=1.4, arrow_plan_id="A008"))
+    nodes.append(node("rsei_change_analysis", "process_box", 33, 568, 470, 32, "RSEI change analysis", fill="#FFFFFF", line="#111111", z=24, font_size=12, rounding=0.0))
+
+    nodes.extend(
+        [
+            frame("pls_sem_region", 549, 192, 508, 268, dashed=True),
+            header("pls_sem_header", 549, 192, 508, 39, "PLS-SEM analysis", container_id="pls_sem_region", font_size=13.5),
+        ]
+    )
+    for index, (x, y, text) in enumerate(
+        [
+            (606, 242, "Precipitation"),
+            (606, 265, "Temperature"),
+            (606, 288, "Evaporation"),
+            (606, 405, "Elevation"),
+            (606, 428, "Slope"),
+            (942, 242, "OC"),
+            (942, 265, "Clay"),
+            (942, 288, "Sand"),
+            (942, 405, "GDP"),
+            (942, 428, "Population"),
+        ]
+    ):
+        nodes.append(node(f"sem_indicator_{index}", "process_box", x, y, 60, 17, text, fill="#F5DDCF", line="#555555", z=30, font_size=5.8, container_id="pls_sem_region", rounding=0.0))
+    latent_nodes = [
+        ("sem_climate", 711, 259, 33, 33, "Climate"),
+        ("sem_terrain", 711, 403, 33, 33, "Terrain"),
+        ("sem_soil", 878, 259, 33, 33, "Soil"),
+        ("sem_urban", 878, 403, 33, 33, "Urbanization"),
+        ("sem_rsei_mid", 789, 348, 33, 33, "R2\nRSEI"),
+    ]
+    for node_id, x, y, w, h, text in latent_nodes:
+        nodes.append(ellipse(node_id, x, y, w, h, "", fill="#FFFFFF", line="#333333", container_id="pls_sem_region", z=38))
+        nodes.append(label(f"{node_id}_label", x - 10, y + h + 2, w + 28, 14, text, font_size=5.8, container_id="pls_sem_region", z=91))
+    nodes.append(node("sem_rsei_box", "process_box", 786, 286, 48, 24, "RSEI", fill="#F4E7DE", line="#555555", z=38, font_size=7.5, container_id="pls_sem_region", rounding=0.0))
+    nodes.append(ellipse("sem_r2_top", 869, 285, 25, 25, "R2", fill="#FFFFFF", line="#333333", font_size=5.5, container_id="pls_sem_region", z=38))
+    sem_edges = [
+        ("sem_rain_to_climate", 666, 250, 711, 275),
+        ("sem_temp_to_climate", 666, 273, 711, 275),
+        ("sem_evap_to_climate", 666, 296, 711, 275),
+        ("sem_elev_to_terrain", 666, 413, 711, 420),
+        ("sem_slope_to_terrain", 666, 436, 711, 420),
+        ("sem_soil_to_oc", 911, 275, 942, 250),
+        ("sem_soil_to_clay", 911, 275, 942, 273),
+        ("sem_soil_to_sand", 911, 275, 942, 296),
+        ("sem_urban_to_gdp", 911, 420, 942, 413),
+        ("sem_urban_to_pop", 911, 420, 942, 436),
+        ("sem_climate_to_rsei", 744, 275, 786, 298),
+        ("sem_terrain_to_rsei_mid", 744, 420, 789, 365),
+        ("sem_soil_to_rsei", 878, 275, 834, 298),
+        ("sem_urban_to_rsei_mid", 878, 420, 822, 365),
+        ("sem_rsei_to_mid", 810, 310, 806, 348),
+        ("sem_climate_to_terrain", 727, 292, 727, 403),
+        ("sem_soil_to_urban", 891, 310, 891, 403),
+        ("sem_terrain_to_urban", 744, 420, 878, 420),
+    ]
+    for edge_id, x1, y1, x2, y2 in sem_edges:
+        edges.append(edge(edge_id, x1, y1, x2, y2, route="straight", color="#7EA074" if "rsei" in edge_id else "#9E6E6A", weight=0.75, z=66, allow_diagonal=True))
+    for index, (x, y) in enumerate([(678, 251), (681, 272), (682, 294), (676, 412), (676, 433), (918, 250), (918, 273), (918, 295), (918, 412), (918, 434), (763, 275), (754, 390), (844, 276), (842, 390)]):
+        nodes.append(label(f"sem_value_{index}", x, y, 28, 10, "Value", font_size=4.6, container_id="pls_sem_region", z=93))
+    edges.append(edge("rsei_to_pls_big", 504, 326, 549, 326, route="horizontal", weight=2.0, z=72, arrow_plan_id="A007"))
+
+    nodes.extend(
+        [
+            frame("global_auto_left_region", 549, 487, 232, 114, dashed=True),
+            header("global_auto_left_header", 549, 487, 232, 41, "Global spatial auto-correlation", container_id="global_auto_left_region", font_size=11.5),
+            frame("global_auto_right_region", 825, 487, 232, 114, dashed=True),
+            header("global_auto_right_header", 825, 487, 232, 41, "Global spatial auto-correlation", container_id="global_auto_right_region", font_size=11.5),
+        ]
+    )
+    nodes.extend(
+        [
+            ellipse("moran_dot_1", 607, 557, 30, 30, "", fill="#B7B7B7", line="#B7B7B7", container_id="global_auto_left_region", z=30),
+            ellipse("moran_dot_2", 626, 566, 19, 19, "", fill="#9C9C9C", line="#9C9C9C", container_id="global_auto_left_region", z=31),
+            label("moran_i_label", 638, 557, 90, 28, "Moran's I", font_size=12, container_id="global_auto_left_region", z=92),
+            label("local_moran_label", 872, 554, 130, 28, "Local Moran's I", font_size=10.5, container_id="global_auto_right_region", z=92),
+            grid("auto_grid_right", 945, 546, 70, 42, rows=4, cols=6, colors=("#D5DDE8", "#9CADC4"), container_id="global_auto_right_region", z=30),
+        ]
+    )
+    edges.append(edge("rsei_to_global_auto_left", 504, 543, 549, 543, route="horizontal", weight=2.0, z=72, arrow_plan_id="A009"))
+    edges.append(edge("global_auto_left_to_right", 781, 543, 825, 543, route="horizontal", weight=2.0, z=72, arrow_plan_id="A010"))
+
+    arrow_plan = [
+        {"id": "A001", "from": "Landsat 5 TM source", "to": "Pre-processing", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A002", "from": "Landsat 8 OLI source", "to": "Pre-processing", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A003", "from": "JRC water layers", "to": "Water Mask extraction", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A004", "from": "Pre-processing", "to": "RSEI information extraction by GEE", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A005", "from": "Extracting Water Mask", "to": "RSEI information extraction by GEE", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A006", "from": "Driver Layer", "to": "PLS-SEM analysis", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A007", "from": "RSEI extraction panel", "to": "PLS-SEM analysis", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A008", "from": "RSEI maps", "to": "RSEI change analysis", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A009", "from": "RSEI maps", "to": "Global spatial auto-correlation", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A010", "from": "Global spatial auto-correlation", "to": "Local/global spatial auto-correlation detail", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+    ]
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.remote_sensing_rsei_workflow",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "remote_sensing_rsei_workflow",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_remote_sensing_workflow_template",
+                "diagram_family": "remote_sensing_rsei_workflow_with_pls_sem",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_visible_ocr_labels_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "images_data_region", "category": "input_data", "source_bbox_px": [31, 16, 505, 163], "required_visible_labels": ["Images data", "Landsat 5 TM", "Landsat 8 OLI", "JRC Global Surface Water Mapping Layers"]},
+                    {"id": "driver_layer_region", "category": "driver_data", "source_bbox_px": [512, 16, 1057, 163], "required_visible_labels": ["Driver Layer", "Terrain", "Climate", "Soil", "Urbanization"]},
+                    {"id": "pre_processing_region", "category": "preprocess", "source_bbox_px": [33, 192, 353, 255], "required_visible_labels": ["Pre-processing", "LEDAPS", "LaSRC", "CFMASK", "Mosaic"]},
+                    {"id": "extracting_region", "category": "extracting", "source_bbox_px": [356, 192, 504, 255], "required_visible_labels": ["Extracting", "Water Mask"]},
+                    {"id": "rsei_region", "category": "rsei_extraction", "source_bbox_px": [32, 282, 504, 540], "required_visible_labels": ["RSEI information extraction by GEE", "NDVI", "NDSI", "WET", "LST", "Normalization, PCA", "Multi-year RSEI maps"]},
+                    {"id": "pls_sem_region", "category": "pls_sem", "source_bbox_px": [549, 192, 1057, 460], "required_visible_labels": ["PLS-SEM analysis", "Climate", "Soil", "Terrain", "Urbanization", "RSEI"]},
+                    {"id": "global_auto_left_region", "category": "spatial_autocorrelation", "source_bbox_px": [549, 487, 781, 601], "required_visible_labels": ["Global spatial auto-correlation", "Moran's I"]},
+                    {"id": "global_auto_right_region", "category": "spatial_autocorrelation", "source_bbox_px": [825, 487, 1057, 601], "required_visible_labels": ["Global spatial auto-correlation"]},
+                ],
+            },
+            "region_plan": [
+                {"id": "images_data_region", "category": "input_data", "source_bbox_px": [31, 16, 505, 163]},
+                {"id": "driver_layer_region", "category": "driver_data", "source_bbox_px": [512, 16, 1057, 163]},
+                {"id": "pre_processing_region", "category": "preprocess", "source_bbox_px": [33, 192, 353, 255]},
+                {"id": "extracting_region", "category": "extracting", "source_bbox_px": [356, 192, 504, 255]},
+                {"id": "rsei_region", "category": "rsei_extraction", "source_bbox_px": [32, 282, 504, 540]},
+                {"id": "pls_sem_region", "category": "pls_sem", "source_bbox_px": [549, 192, 1057, 460]},
+                {"id": "global_auto_left_region", "category": "spatial_autocorrelation", "source_bbox_px": [549, 487, 781, 601]},
+                {"id": "global_auto_right_region", "category": "spatial_autocorrelation", "source_bbox_px": [825, 487, 1057, 601]},
+            ],
+            "arrow_plan": arrow_plan,
+            "notes": [
+                "Editable semantic reconstruction for remote-sensing RSEI workflow diagrams with PLS-SEM and spatial auto-correlation panels.",
+                "Input data cubes, driver icons, RSEI index blocks, map thumbnails, PLS-SEM latent path model, and analysis panels are rebuilt as editable Visio objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_scene(
     image_path: Path,
     *,
@@ -4524,6 +5233,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_remote_sensing_rsei_workflow_figure(ocr_items, width, height):
+        scene = build_remote_sensing_rsei_workflow_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_deformable_transformer_encoder_decoder_figure(ocr_items, width, height):
         scene = build_deformable_transformer_encoder_decoder_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"

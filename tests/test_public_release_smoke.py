@@ -371,6 +371,77 @@ def test_attention_mechanism_uses_editable_template(tmp_path: Path, monkeypatch)
     assert len(scene["edges"]) == 6
 
 
+def test_remote_sensing_rsei_workflow_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "remote_sensing_rsei.png"
+    Image.new("RGB", (1080, 614), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Images data",
+            "Landsat 5 TM",
+            "Landsat 8 OLI",
+            "JRC Global Surface Water Mapping Layers",
+            "Surface Reflectance images",
+            "Driver Layer",
+            "Terrain",
+            "Climate",
+            "Soil",
+            "Urbanization",
+            "Pre-processing",
+            "LEDAPS",
+            "LaSRC",
+            "CFMASK",
+            "Mosaic",
+            "Extracting",
+            "Water Mask",
+            "RSEI information extraction by GEE",
+            "NDVI",
+            "NDSI",
+            "WET",
+            "LST",
+            "Normalization, PCA",
+            "Multi-year RSEI maps",
+            "RSEI change analysis",
+            "PLS-SEM analysis",
+            "Global spatial auto-correlation",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = [node.get("type") for node in scene["nodes"]]
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.remote_sensing_rsei_workflow"
+    assert scene["metadata"]["architecture_template"] == "remote_sensing_rsei_workflow"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types.count("dashed_region") >= 8
+    assert node_types.count("group_container") >= 1
+    assert node_types.count("tensor_stack") >= 2
+    assert node_types.count("feature_map_grid") >= 1
+    assert node_types.count("grid_matrix") >= 1
+    assert node_types.count("polygon_node") >= 10
+    assert node_types.count("ellipse_node") >= 10
+    assert node_types.count("rounded_process") >= 8
+    for label in [
+        "Images data",
+        "Driver Layer",
+        "RSEI information extraction by GEE",
+        "NDVI",
+        "NDSI",
+        "WET",
+        "LST",
+        "Normalization, PCA",
+        "PLS-SEM analysis",
+        "Global spatial auto-correlation",
+        "RSEI change analysis",
+    ]:
+        assert label in texts
+    assert len(scene["edges"]) >= 34
+
+
 def test_channel_attention_recalibration_uses_editable_shape_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "channel_attention.png"
     Image.new("RGB", (981, 469), "white").save(source)
