@@ -10,6 +10,9 @@ ENV/
 
 build/
 dist/
+!dist/
+dist/*
+!dist/Fig4VisioGUI.exe
 *.egg-info/
 
 .mypy_cache/

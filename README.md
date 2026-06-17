@@ -96,7 +96,7 @@ work/gui_runs/<timestamp>/
 dist/Fig4VisioGUI.exe
 ```
 
-注意：`dist/` 和生成的 `.exe` 默认不提交到 Git 仓库。GitHub 普通 Git 仓库单文件限制为 100MB，当前 EXE 超过该限制。需要直接下载 EXE 时，请在本仓库的 GitHub Releases 中下载 `Fig4VisioGUI.exe`；也可以本地运行 `build_exe.ps1` 重新打包。
+注意：`dist/Fig4VisioGUI.exe` 通过 Git LFS 跟踪，用于同步当前可运行版本；`build/`、`work/` 和其它临时输出仍不进入 Git 仓库。需要重新构建时，也可以本地运行 `build_exe.ps1`。
 
 ## CLI 使用
 
@@ -204,9 +204,9 @@ git commit -m "Describe update"
 git push origin main
 ```
 
-后续在本项目中继续修改代码时，应同步更新 README、requirements、测试结果，并推送到 GitHub。生成目录如 `.venv/`、`build/`、`dist/`、`work/`、`exports/` 不进入 Git 仓库。
+后续在本项目中继续修改代码时，应同步更新 README、requirements、测试结果，并推送到 GitHub。生成目录如 `.venv/`、`build/`、`work/`、`exports/` 不进入 Git 仓库；`dist/Fig4VisioGUI.exe` 作为发布构建产物由 Git LFS 跟踪。
 
-大文件说明：如果后续需要把大型构建产物直接纳入 Git 工作流，可以使用 Git LFS；当前公开发布的 EXE 使用 GitHub Releases 分发。
+大文件说明：`dist/Fig4VisioGUI.exe` 使用 Git LFS 分发；如果同步或下载失败，请先安装 Git LFS 并执行 `git lfs pull`。
 
 ## License
 

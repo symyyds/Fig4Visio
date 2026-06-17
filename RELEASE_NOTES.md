@@ -1,3 +1,22 @@
+# Fig4Visio v0.3.14 Release Notes
+
+This update adds a generalized semantic reconstruction path for Industry 4.0 sustainability framework figures. The selector uses combined OCR signals such as `Industry 4.0`, `Technologies`, `Components`, `Principles`, `Industry 4.0 Sustainability Functions`, `Sustainable Manufacturing`, `Social development`, `Sustainable economic growth`, `Renewables`, and `Green manufacturing`; it is not tied to a filename or image hash.
+
+## Core Updates
+
+- Added `industry_4_0_sustainability_framework` detection before generic `clean_flow`, so these three-column framework figures no longer fall through to noisy OCR-anchored module reconstruction.
+- Rebuilds the left Industry 4.0 layers, center sustainability-function list, right sustainable-manufacturing outcome cards, inter-column arrows, and simplified outcome icons as Visio-editable objects.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage requiring the new category template, editable containers/modules/icons, key labels, main arrows, and no raster embedding.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 31 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- `dist\Fig4VisioGUI.exe --smoke`: passed
+- User-provided Industry 4.0 sustainability framework image: semantic template selected on the first standard pass, screenshot self-check score improved from the previous generic-flow `0.4744` to `0.6454`, and no image embedding was present (`assets=0`, `image_tiles=0`).
+
 # Fig4Visio v0.3.13 Release Notes
 
 This update changes the GUI retry policy to match the requested "try five times, then output the best current files" workflow. The result is not mislabeled as passed: if the output is forced after failed checks, the quality report marks it as `forced_output_after_retries`.

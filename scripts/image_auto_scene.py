@@ -1434,6 +1434,84 @@ def is_drought_basin_workflow_figure(ocr_items: list[dict[str, Any]], width: int
     return 0.45 <= aspect <= 0.95 and has_drought and has_spei and has_datasets and has_clustering and signal_count >= 7
 
 
+def is_industry_4_0_sustainability_framework_figure(
+    ocr_items: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+
+    has_industry = "industry40" in compact or "industry4o" in compact or (
+        "industry" in compact and ("40" in compact or "4o" in compact)
+    )
+    has_left_framework = sum(token in compact for token in ("technologies", "components", "principles")) >= 2
+    has_tech_terms = sum(
+        token in compact
+        for token in (
+            "artificialintelligence",
+            "mixedreality",
+            "robotics",
+            "blockchain",
+            "bigdata",
+            "analytics",
+            "digitaltwins",
+            "cps",
+            "iiot",
+            "llot",
+        )
+    ) >= 3
+    has_sustainability_functions = "sustainabilityfunctions" in compact or (
+        "sustainability" in compact and "functions" in compact
+    )
+    has_function_list = sum(
+        token in compact
+        for token in (
+            "businessmodelinnovation",
+            "customerorientedmanufacturing",
+            "employeeproductivity",
+            "harmfulemissionreduction",
+            "manufacturingagility",
+            "resourceandenergyefficiency",
+            "sustainableproductdevelopment",
+            "supplychainprocessintegration",
+        )
+    ) >= 4
+    has_sustainable_manufacturing = "sustainablemanufacturing" in compact or (
+        "sustainable" in compact and "manufacturing" in compact
+    )
+    has_output_cards = sum(
+        token in compact
+        for token in (
+            "socialdevelopment",
+            "sustainableeconomicgrowth",
+            "renewables",
+            "greenmanufacturing",
+            "greenmanufacaring",
+        )
+    ) >= 2
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_industry,
+            has_left_framework,
+            has_tech_terms,
+            has_sustainability_functions,
+            has_function_list,
+            has_sustainable_manufacturing,
+            has_output_cards,
+        )
+    )
+    return (
+        1.30 <= aspect <= 2.25
+        and has_industry
+        and has_sustainability_functions
+        and has_sustainable_manufacturing
+        and signal_count >= 6
+    )
+
+
 def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
     corpus = ocr_corpus(ocr_items).lower()
     compact = re.sub(r"[^a-z0-9]+", "", corpus)
@@ -5264,6 +5342,682 @@ def build_remote_sensing_rsei_workflow_scene(
     }
 
 
+def build_industry_4_0_sustainability_framework_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 981.0
+    base_h = 561.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def attach(item: dict[str, Any], x: float, y: float, w: float, h: float, container_id: str | None = None) -> dict[str, Any]:
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        if container_id:
+            item["container_id"] = container_id
+        item.setdefault("allow_overlap", True)
+        return item
+
+    def page_node() -> dict[str, Any]:
+        return px_node("page_background", "page_background", 0, 0, width, height, "", fill="#FFFFFF", line="none", z=0)
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#111111",
+        z: int = 20,
+        font_size: float = 11,
+        dash: str = "solid",
+        rounding: float = 0.04,
+        container_id: str | None = None,
+        weight: str = "regular",
+        text_color: str = "#111111",
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color=text_color,
+            dash=dash,
+            rounding=rounding,
+        )
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Georgia", "Arial", "Microsoft YaHei UI"],
+                "font_role": "paper_serif",
+                "font_weight": weight,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.6,
+                "text_margin_in": 0.025,
+                "line_weight_pt": 1.1,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 11,
+        weight: str = "regular",
+        italic: bool = False,
+        color: str = "#111111",
+        container_id: str | None = None,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Georgia", "Arial", "Microsoft YaHei UI"],
+                "font_role": "paper_serif",
+                "font_italic": italic,
+                "text_color": color,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.6,
+                "text_margin_in": 0.0,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def frame(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        container_id: str | None = None,
+        dashed: bool = True,
+        fill: str = "none",
+        line: str = "#111111",
+        z: int = 4,
+        rounding: float = 0.0,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "dashed_region" if dashed else "group_container",
+            x,
+            y,
+            w,
+            h,
+            "",
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=1,
+            dash="dash" if dashed else "solid",
+            rounding=rounding,
+            container_id=container_id,
+        )
+        item["style"].update({"line_weight_pt": 1.25, "fill": fill})
+        return item
+
+    def container(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        fill: str,
+        line: str,
+        container_id: str | None = None,
+        z: int = 10,
+        rounding: float = 0.07,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "group_container",
+            x,
+            y,
+            w,
+            h,
+            "",
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=1,
+            rounding=rounding,
+            container_id=container_id,
+        )
+        item["style"].update({"line_weight_pt": 1.25})
+        return item
+
+    def rounded(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        fill: str,
+        line: str,
+        font_size: float = 10.5,
+        container_id: str | None = None,
+        z: int = 28,
+        rounding: float = 0.07,
+        weight: str = "regular",
+        color: str = "#111111",
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "rounded_process",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=rounding,
+            container_id=container_id,
+            weight=weight,
+            text_color=color,
+        )
+        item["style"].update({"line_weight_pt": 1.25})
+        return item
+
+    def ellipse(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str,
+        line: str,
+        font_size: float = 9.0,
+        color: str = "#111111",
+        container_id: str | None = None,
+        z: int = 34,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "ellipse_node",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.0,
+            container_id=container_id,
+            text_color=color,
+        )
+        item["style"].update({"line_weight_pt": 1.35, "text_fit": "shrink_to_fit"})
+        return item
+
+    def polygon(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        points: list[list[float]],
+        *,
+        fill: str,
+        line: str = "#111111",
+        container_id: str | None = None,
+        z: int = 40,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "polygon_node",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "points": points,
+            "style": {"fill": fill, "line": line, "line_weight_pt": 0.9},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def edge(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        arrow: bool = True,
+        begin_arrow: bool = False,
+        color: str = "#111111",
+        weight: float = 1.4,
+        z: int = 70,
+        arrow_size: str = "small",
+        arrow_plan_id: str | None = None,
+        allow_diagonal: bool = False,
+        allow_direct_cross_container: bool = False,
+    ) -> dict[str, Any]:
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=arrow,
+            route=route,
+            points=[[sx(px), sy(py)] for px, py in points] if points else None,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"].update(
+            {
+                "line": color,
+                "line_weight_pt": weight,
+                "end_arrow": "triangle" if arrow else "none",
+                "arrow_size": arrow_size,
+            }
+        )
+        if begin_arrow:
+            item["style"]["begin_arrow"] = "triangle"
+        if route in {"horizontal", "vertical"} and arrow:
+            item["type"] = "lane_arrow"
+        if arrow_plan_id:
+            item["arrow_plan_id"] = arrow_plan_id
+        if allow_diagonal:
+            item["allow_diagonal"] = True
+        if allow_direct_cross_container:
+            item["allow_direct_cross_container"] = True
+        return item
+
+    nodes: list[dict[str, Any]] = [page_node()]
+    edges: list[dict[str, Any]] = []
+
+    # Main three-column framework.
+    nodes.extend(
+        [
+            frame("industry_outer", 15, 20, 412, 524, dashed=True, z=2),
+            frame("functions_outer", 456, 19, 297, 524, dashed=True, z=2),
+            frame("manufacturing_outer", 783, 20, 182, 524, dashed=True, z=2),
+            label("industry_title", 150, 22, 144, 24, "Industry 4.0", font_size=13.5, weight="bold", container_id="industry_outer"),
+            label(
+                "functions_title",
+                493,
+                15,
+                225,
+                38,
+                "Industry 4.0 Sustainability\nFunctions",
+                font_size=13.5,
+                weight="bold",
+                container_id="functions_outer",
+            ),
+            label(
+                "manufacturing_title",
+                815,
+                14,
+                120,
+                36,
+                "Sustainable\nManufacturing",
+                font_size=12.8,
+                weight="bold",
+                container_id="manufacturing_outer",
+            ),
+        ]
+    )
+
+    left_panels = [
+        ("technologies", 30, 46, 382, 140, "Technologies"),
+        ("components", 31, 216, 381, 141, "Components"),
+        ("principles", 31, 395, 381, 139, "Principles"),
+    ]
+    for panel_id, x, y, w, h, text in left_panels:
+        nodes.append(
+            container(
+                f"{panel_id}_panel",
+                x,
+                y,
+                w,
+                h,
+                fill="#F7F7F2",
+                line="#333333",
+                container_id="industry_outer",
+                z=10,
+                rounding=0.08,
+            )
+        )
+        nodes.append(label(f"{panel_id}_label", x + 4, y + 5, 112, 24, text, font_size=15, italic=True, container_id=f"{panel_id}_panel"))
+
+    tech_specs = [
+        ("artificial_intelligence", 34, 81, 101, 47, "Artificial\nintelligence"),
+        ("mixed_reality", 138, 54, 90, 54, "Mixed\nReality"),
+        ("iiot", 235, 74, 62, 43, "IIoT"),
+        ("blockchain", 301, 52, 90, 54, "Blockchain"),
+        ("digital_twins", 33, 134, 108, 45, "Digital\ntwins"),
+        ("robotics", 142, 126, 90, 41, "Robotics"),
+        ("big_data", 236, 127, 88, 54, "Big data\nanalytics"),
+        ("cps", 329, 126, 74, 42, "CPS"),
+    ]
+    for tech_id, x, y, w, h, text in tech_specs:
+        nodes.append(
+            ellipse(
+                f"tech_{tech_id}",
+                x,
+                y,
+                w,
+                h,
+                text,
+                fill="#D9E8F7",
+                line="#2A7CB6",
+                font_size=9.5,
+                color="#4F6B99",
+                container_id="technologies_panel",
+            )
+        )
+
+    component_specs = [
+        ("smart_customers", 142, 224, 240, 37, "Smart customers"),
+        ("smart_distribution", 42, 270, 125, 35, "Smart\ndistribution"),
+        ("digital_supply", 180, 270, 114, 35, "Digital supply\nnetworks"),
+        ("smart_shareholders", 299, 270, 108, 72, "Smart\nshareholders"),
+        ("smart_factory", 45, 313, 121, 34, "Smart factory"),
+        ("smart_products", 181, 313, 114, 34, "Smart\nproducts"),
+    ]
+    for comp_id, x, y, w, h, text in component_specs:
+        nodes.append(
+            rounded(
+                f"component_{comp_id}",
+                x,
+                y,
+                w,
+                h,
+                text,
+                fill="#FFF4D3",
+                line="#D18835",
+                font_size=9.8,
+                color="#7B4B22",
+                container_id="components_panel",
+                rounding=0.035,
+            )
+        )
+
+    principle_specs = [
+        ("virtualization", 120, 409, 138, 36, "Virtualization"),
+        ("vertical_integration", 265, 409, 137, 36, "Vertical\nintegration"),
+        ("real_time", 69, 452, 189, 37, "Real-time capability"),
+        ("interoperability", 264, 452, 139, 37, "Interoperability"),
+        ("technical_assistance", 42, 495, 104, 35, "Technical\nassistance"),
+        ("decentralization", 151, 495, 139, 35, "Decentralization"),
+        ("horizontal_integration", 294, 495, 109, 35, "Horizontal\nintegration"),
+    ]
+    for princ_id, x, y, w, h, text in principle_specs:
+        nodes.append(
+            rounded(
+                f"principle_{princ_id}",
+                x,
+                y,
+                w,
+                h,
+                text,
+                fill="#F4E2F4",
+                line="#9559A3",
+                font_size=9.5,
+                color="#7A4B88",
+                container_id="principles_panel",
+                rounding=0.035,
+            )
+        )
+
+    for index, x in enumerate((86, 235, 365)):
+        edges.append(edge(f"tech_components_link_{index}", x, 188, x, 212, route="vertical", begin_arrow=True, weight=5.0, arrow_size="medium", allow_direct_cross_container=True))
+        edges.append(edge(f"components_principles_link_{index}", x, 358, x, 389, route="vertical", begin_arrow=True, weight=5.0, arrow_size="medium", allow_direct_cross_container=True))
+
+    function_labels = [
+        "Business model innovation",
+        "Customer-oriented manufacturing",
+        "Employee productivity",
+        "Harmful emission reduction",
+        "Improved manufacturing profit margin",
+        "Intelligent production planning and control",
+        "Manufacturing agility",
+        "Manufacturing productivity and efficiency",
+        "New employment opportunities",
+        "Resource and energy efficiency",
+        "Reduced manufacturing costs",
+        "Safe and smart working environment",
+        "Supply chain process integration",
+        "Sustainable product development",
+        "Sustainable value-creation networking",
+    ]
+    row_x = 466
+    row_w = 278
+    row_h = 28
+    row_y0 = 53
+    row_gap = 33
+    for index, text in enumerate(function_labels):
+        y = row_y0 + index * row_gap
+        nodes.append(
+            rounded(
+                f"function_{index + 1:02d}",
+                row_x,
+                y,
+                row_w,
+                row_h,
+                text,
+                fill="#FFFDE4",
+                line="#C8C04D",
+                font_size=9.2,
+                container_id="functions_outer",
+                rounding=0.035,
+            )
+        )
+
+    cross_arrow_y = [98, 230, 326, 491]
+    for index, y in enumerate(cross_arrow_y, start=1):
+        edges.append(
+            edge(
+                f"industry_to_functions_{index}",
+                427,
+                y,
+                456,
+                y,
+                route="horizontal",
+                weight=6.0,
+                arrow_size="medium",
+                arrow_plan_id=f"A{index:03d}",
+                allow_direct_cross_container=True,
+            )
+        )
+        edges.append(
+            edge(
+                f"functions_to_manufacturing_{index}",
+                753,
+                y,
+                783,
+                y,
+                route="horizontal",
+                weight=6.0,
+                arrow_size="medium",
+                arrow_plan_id=f"A{index + 4:03d}",
+                allow_direct_cross_container=True,
+            )
+        )
+
+    outcome_cards = [
+        ("social", 789, 47, 170, 122, "Social development"),
+        ("economic", 789, 171, 170, 121, "Sustainable economic\ngrowth"),
+        ("renewables", 789, 295, 170, 122, "Renewables"),
+        ("green", 789, 419, 170, 122, "Green manufacturing"),
+    ]
+    for card_id, x, y, w, h, text in outcome_cards:
+        nodes.append(
+            container(
+                f"{card_id}_card",
+                x,
+                y,
+                w,
+                h,
+                fill="#E9F3DD",
+                line="#23A052",
+                container_id="manufacturing_outer",
+                z=12,
+                rounding=0.075,
+            )
+        )
+        nodes.append(label(f"{card_id}_title", x + 9, y + 2, w - 18, 31, text, font_size=10.0, weight="bold", color="#4E8C3F", container_id=f"{card_id}_card"))
+
+    # Editable icon approximations for the four right-side cards.
+    nodes.extend(
+        [
+            ellipse("social_globe", 855, 75, 60, 60, "", fill="#1E8FAA", line="#1E8FAA", container_id="social_card", z=30),
+            polygon("social_land_a", 864, 84, 26, 25, [[0.08, 0.40], [0.30, 0.10], [0.70, 0.18], [0.86, 0.55], [0.50, 0.92], [0.14, 0.72]], fill="#4FB34F", line="#4FB34F", container_id="social_card", z=34),
+            polygon("social_land_b", 889, 99, 25, 25, [[0.15, 0.18], [0.78, 0.20], [0.88, 0.62], [0.40, 0.88], [0.05, 0.50]], fill="#55BC50", line="#55BC50", container_id="social_card", z=34),
+            node("social_factory_base", "process_box", 812, 130, 36, 26, "", fill="#F0B62E", line="#F0B62E", container_id="social_card", z=29, rounding=0.0),
+            node("social_factory_stack", "process_box", 813, 104, 10, 52, "", fill="#C94D32", line="#C94D32", container_id="social_card", z=29, rounding=0.0),
+            ellipse("social_person_head", 926, 70, 14, 14, "", fill="#F3C34C", line="#F3C34C", container_id="social_card", z=34),
+            node("social_person_body", "process_box", 928, 84, 9, 38, "", fill="#2F6FC2", line="#2F6FC2", container_id="social_card", z=33, rounding=0.03),
+        ]
+    )
+    edges.extend(
+        [
+            edge("social_ladder_a", 935, 89, 948, 139, route="straight", arrow=False, color="#F2C344", weight=2.0, z=36, allow_diagonal=True),
+            edge("social_ladder_b", 948, 89, 936, 139, route="straight", arrow=False, color="#F2C344", weight=2.0, z=36, allow_diagonal=True),
+        ]
+    )
+
+    for idx, (x, top, fill) in enumerate(((826, 238, "#1AA6A5"), (872, 220, "#00A87E"), (917, 202, "#46B073"))):
+        nodes.append(node(f"economic_bar_{idx}", "process_box", x, top, 20, 260 - top, "", fill=fill, line=fill, container_id="economic_card", z=30, rounding=0.02))
+        nodes.append(ellipse(f"economic_bar_cap_{idx}", x, top - 5, 20, 10, "", fill=fill, line=fill, container_id="economic_card", z=31))
+    for idx, (x1, y1, x2, y2) in enumerate(((819, 229, 848, 209), (848, 209, 884, 222), (884, 222, 923, 190))):
+        edges.append(edge(f"economic_growth_line_{idx}", x1, y1, x2, y2, route="straight", arrow=idx == 2, color="#BF3B2B", weight=2.0, z=42, allow_diagonal=True))
+
+    nodes.extend(
+        [
+            polygon("renewables_panel", 807, 324, 91, 58, [[0.04, 0.20], [0.70, 0.03], [0.98, 0.83], [0.24, 0.98]], fill="#1F6F88", line="#143F54", container_id="renewables_card", z=30),
+            polygon("renewables_panel_face", 816, 331, 73, 45, [[0.05, 0.20], [0.70, 0.03], [0.94, 0.82], [0.24, 0.96]], fill="#2E879D", line="#2E879D", container_id="renewables_card", z=31),
+            node("renewables_house", "process_box", 839, 379, 38, 22, "", fill="#889AA0", line="#75858A", container_id="renewables_card", z=30, rounding=0.0),
+            polygon("renewables_roof", 835, 365, 46, 20, [[0.06, 0.86], [0.50, 0.08], [0.96, 0.86]], fill="#6A7B7F", line="#6A7B7F", container_id="renewables_card", z=32),
+            polygon("renewables_tree", 910, 366, 23, 38, [[0.52, 0.04], [0.86, 0.48], [0.64, 0.48], [0.92, 0.92], [0.08, 0.92], [0.36, 0.48], [0.14, 0.48]], fill="#76A45D", line="#76A45D", container_id="renewables_card", z=33),
+        ]
+    )
+    edges.extend(
+        [
+            edge("solar_grid_v1", 835, 327, 855, 379, route="straight", arrow=False, color="#D6EEF1", weight=0.7, z=36, allow_diagonal=True),
+            edge("solar_grid_v2", 855, 322, 879, 376, route="straight", arrow=False, color="#D6EEF1", weight=0.7, z=36, allow_diagonal=True),
+            edge("solar_grid_h1", 815, 344, 893, 334, route="straight", arrow=False, color="#D6EEF1", weight=0.7, z=36, allow_diagonal=True),
+            edge("solar_grid_h2", 821, 358, 899, 350, route="straight", arrow=False, color="#D6EEF1", weight=0.7, z=36, allow_diagonal=True),
+        ]
+    )
+
+    nodes.extend(
+        [
+            node("green_factory_base", "process_box", 812, 500, 112, 28, "", fill="#78BFD0", line="#78BFD0", container_id="green_card", z=30, rounding=0.0),
+            polygon("green_factory_roof", 812, 484, 92, 28, [[0.00, 1.00], [0.15, 0.45], [0.31, 1.00], [0.48, 0.30], [0.64, 1.00], [0.82, 0.45], [1.00, 1.00]], fill="#5AA8BD", line="#5AA8BD", container_id="green_card", z=32),
+            node("green_chimney_main", "process_box", 862, 455, 12, 73, "", fill="#158A9D", line="#158A9D", container_id="green_card", z=31, rounding=0.0),
+            node("green_chimney_top", "process_box", 858, 452, 20, 6, "", fill="#158A9D", line="#158A9D", container_id="green_card", z=32, rounding=0.0),
+            node("green_tower_left", "process_box", 920, 476, 20, 52, "", fill="#1F8BBD", line="#1F8BBD", container_id="green_card", z=31, rounding=0.02),
+            node("green_tower_right", "process_box", 948, 461, 9, 67, "", fill="#DE684E", line="#DE684E", container_id="green_card", z=31, rounding=0.0),
+            ellipse("green_dome_left", 920, 466, 20, 17, "", fill="#2A94C8", line="#2A94C8", container_id="green_card", z=32),
+            ellipse("green_dome_center", 891, 473, 22, 19, "", fill="#60B070", line="#60B070", container_id="green_card", z=34),
+        ]
+    )
+
+    arrow_plan = [
+        {"id": "A001", "from": "Industry 4.0 Technologies", "to": "Sustainability function list", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A002", "from": "Industry 4.0 Components", "to": "Sustainability function list", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A003", "from": "Industry 4.0 Components", "to": "Sustainability function list", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A004", "from": "Industry 4.0 Principles", "to": "Sustainability function list", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A005", "from": "Sustainability function list", "to": "Social development", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A006", "from": "Sustainability function list", "to": "Sustainable economic growth", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A007", "from": "Sustainability function list", "to": "Renewables", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A008", "from": "Sustainability function list", "to": "Green manufacturing", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+    ]
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.industry_4_0_sustainability_framework",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "industry_4_0_sustainability_framework",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_three_column_framework_template",
+                "diagram_family": "industry_4_0_sustainability_functions_to_sustainable_manufacturing",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_visible_ocr_labels_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "industry_outer", "category": "source_framework", "source_bbox_px": [15, 20, 427, 544], "required_visible_labels": ["Industry 4.0", "Technologies", "Components", "Principles"]},
+                    {"id": "technologies_panel", "category": "technology_layer", "source_bbox_px": [30, 46, 412, 186], "required_visible_labels": ["Artificial intelligence", "Mixed Reality", "IIoT", "Blockchain", "Digital twins", "Robotics", "Big data analytics", "CPS"]},
+                    {"id": "components_panel", "category": "component_layer", "source_bbox_px": [31, 216, 412, 357], "required_visible_labels": ["Smart customers", "Smart distribution", "Digital supply networks", "Smart shareholders", "Smart factory", "Smart products"]},
+                    {"id": "principles_panel", "category": "principle_layer", "source_bbox_px": [31, 395, 412, 534], "required_visible_labels": ["Virtualization", "Vertical integration", "Real-time capability", "Interoperability", "Technical assistance", "Decentralization", "Horizontal integration"]},
+                    {"id": "functions_outer", "category": "function_list", "source_bbox_px": [456, 19, 753, 543], "required_visible_labels": ["Industry 4.0 Sustainability Functions", "Business model innovation", "Sustainable value-creation networking"]},
+                    {"id": "manufacturing_outer", "category": "outcomes", "source_bbox_px": [783, 20, 965, 544], "required_visible_labels": ["Sustainable Manufacturing", "Social development", "Sustainable economic growth", "Renewables", "Green manufacturing"]},
+                ],
+            },
+            "region_plan": [
+                {"id": "industry_outer", "category": "source_framework", "source_bbox_px": [15, 20, 427, 544]},
+                {"id": "functions_outer", "category": "function_list", "source_bbox_px": [456, 19, 753, 543]},
+                {"id": "manufacturing_outer", "category": "outcomes", "source_bbox_px": [783, 20, 965, 544]},
+            ],
+            "arrow_plan": arrow_plan,
+            "notes": [
+                "Editable semantic reconstruction for three-column Industry 4.0 sustainability framework figures.",
+                "The left framework layers, center function list, right outcome cards, inter-column arrows, and outcome pictograms are rebuilt as Visio-editable objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_drought_basin_workflow_scene(
     image_path: Path,
     width: int,
@@ -5752,6 +6506,11 @@ def build_scene(
         return scene
     if is_remote_sensing_rsei_workflow_figure(ocr_items, width, height):
         scene = build_remote_sensing_rsei_workflow_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
+    if is_industry_4_0_sustainability_framework_figure(ocr_items, width, height):
+        scene = build_industry_4_0_sustainability_framework_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
         scene.setdefault("metadata", {})["reconstruction_mode"] = mode
         return scene
