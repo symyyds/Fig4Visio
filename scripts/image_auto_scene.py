@@ -1390,6 +1390,42 @@ def is_remote_sensing_rsei_workflow_figure(ocr_items: list[dict[str, Any]], widt
     return 1.40 <= aspect <= 2.25 and has_rsei and rsei_index_count >= 3 and has_pls_sem and signal_count >= 6
 
 
+def is_drought_basin_workflow_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    compact = re.sub(r"[^a-z0-9]+", "", corpus)
+    aspect = width / max(1, height)
+
+    has_datasets = "datasetsinput" in compact or ("datasets" in compact and "input" in compact)
+    has_drought = "drought" in compact
+    has_spei = "spei12" in compact or "spei" in compact or "spel12" in compact or "spel" in compact
+    has_inputs = sum(token in compact for token in ("meteorologicaldata", "sstdata", "nino34data", "riverbasinsdata")) >= 3
+    has_basin_panel = "34majorglobalriverbasins" in compact or ("riverbasins" in compact and "global" in compact)
+    has_clustering = "3ddroughtclustering" in compact or ("clustering" in compact and "droughtstructure" in compact)
+    has_characteristics = "droughteventcharacteristics" in compact or (
+        "droughtduration" in compact and "droughtarea" in compact
+    )
+    has_mca = "maximumcovarianceanalysis" in compact or "mca2" in compact or ("sst" in compact and "enso" in compact)
+    has_influencing = "influencingfactorsofdrought" in compact or ("influencing" in compact and "drought" in compact)
+    has_final = "meteorologicaldrought" in compact or "identificationandcontrast" in compact
+
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_datasets,
+            has_drought,
+            has_spei,
+            has_inputs,
+            has_basin_panel,
+            has_clustering,
+            has_characteristics,
+            has_mca,
+            has_influencing,
+            has_final,
+        )
+    )
+    return 0.45 <= aspect <= 0.95 and has_drought and has_spei and has_datasets and has_clustering and signal_count >= 7
+
+
 def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
     corpus = ocr_corpus(ocr_items).lower()
     compact = re.sub(r"[^a-z0-9]+", "", corpus)
@@ -5220,6 +5256,474 @@ def build_remote_sensing_rsei_workflow_scene(
     }
 
 
+def build_drought_basin_workflow_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 981.0
+    base_h = 1417.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def attach(item: dict[str, Any], x: float, y: float, w: float, h: float, container_id: str | None = None) -> dict[str, Any]:
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        if container_id:
+            item["container_id"] = container_id
+        item.setdefault("allow_overlap", True)
+        return item
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#8A8F96",
+        z: int = 20,
+        font_size: float = 12,
+        dash: str = "solid",
+        rounding: float = 0.08,
+        container_id: str | None = None,
+        weight: str = "regular",
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color="#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["style"].update(
+            {
+                "font_family_candidates": ["Arial", "Calibri", "Times New Roman", "Microsoft YaHei UI"],
+                "font_role": "ui_sans",
+                "font_weight": weight,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 5.2,
+                "text_margin_in": 0.025,
+                "line_weight_pt": 1.0,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 12,
+        weight: str = "regular",
+        container_id: str | None = None,
+        z: int = 90,
+        color: str = "#111111",
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Arial", "Calibri", "Times New Roman", "Microsoft YaHei UI"],
+                "font_role": "ui_sans",
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 5.0,
+                "text_color": color,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def band(node_id: str, x: float, y: float, w: float, h: float, fill: str) -> dict[str, Any]:
+        item = node(node_id, "group_container", x, y, w, h, "", fill=fill, line="#B8B8B8", z=2, font_size=1, rounding=0.0)
+        item["style"].update({"line_weight_pt": 1.05, "shadow": {"color": "#888888", "offset_x_in": 0.03, "offset_y_in": -0.03, "transparency_pct": 78}})
+        return item
+
+    def title_box(node_id: str, x: float, y: float, w: float, h: float, text: str, fill: str, *, font_size: float = 17) -> dict[str, Any]:
+        item = node(node_id, "rounded_process", x, y, w, h, text, fill=fill, line=fill, z=28, font_size=font_size, rounding=0.04, weight="bold")
+        item["style"]["text_fit"] = "single_line"
+        return item
+
+    def round_panel(node_id: str, x: float, y: float, w: float, h: float, *, container_id: str, fill: str = "#FFFFFF", z: int = 12) -> dict[str, Any]:
+        item = node(node_id, "rounded_process", x, y, w, h, "", fill=fill, line=fill, z=z, font_size=1, rounding=0.20, container_id=container_id)
+        item["style"].update({"shadow": {"color": "#999999", "offset_x_in": 0.035, "offset_y_in": -0.035, "transparency_pct": 82}})
+        return item
+
+    def dashed_box(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        container_id: str,
+        font_size: float = 12,
+        z: int = 35,
+    ) -> dict[str, Any]:
+        item = node(node_id, "rounded_process", x, y, w, h, text, fill="#FFFFFF", line="#111111", z=z, font_size=font_size, dash="dash", rounding=0.06, container_id=container_id)
+        item["style"].update({"line_weight_pt": 1.0, "text_fit": "shrink_to_fit"})
+        return item
+
+    def polygon(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        points: list[list[float]],
+        *,
+        fill: str,
+        line: str = "#6C7A89",
+        container_id: str | None = None,
+        z: int = 42,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "polygon_node",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "points": points,
+            "style": {"fill": fill, "line": line, "line_weight_pt": 0.8},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def ellipse(node_id: str, x: float, y: float, w: float, h: float, *, fill: str, line: str, container_id: str | None = None, z: int = 40) -> dict[str, Any]:
+        return node(node_id, "ellipse_node", x, y, w, h, "", fill=fill, line=line, z=z, font_size=1, rounding=0.0, container_id=container_id)
+
+    def edge(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        color: str = "#2E93A3",
+        weight: float = 2.0,
+        arrow: bool = True,
+        z: int = 72,
+        arrow_plan_id: str | None = None,
+        allow_diagonal: bool = False,
+    ) -> dict[str, Any]:
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=arrow,
+            route=route,
+            points=[[sx(px), sy(py)] for px, py in points] if points else None,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"].update({"line": color, "line_weight_pt": weight, "arrow_size": "small"})
+        if route in {"horizontal", "vertical"} and arrow:
+            item["type"] = "lane_arrow"
+        if arrow_plan_id:
+            item["arrow_plan_id"] = arrow_plan_id
+        if allow_diagonal:
+            item["allow_diagonal"] = True
+        return item
+
+    def grid_matrix(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        rows: int,
+        cols: int,
+        colors: list[str],
+        container_id: str | None = None,
+        z: int = 32,
+    ) -> dict[str, Any]:
+        cells = [[row, col, colors[(row + col) % len(colors)]] for row in range(rows) for col in range(cols)]
+        item = {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "rows": rows,
+            "cols": cols,
+            "colored_cells": cells,
+            "style": {"line": "#8A9AA8", "line_weight_pt": 0.65, "grid_line": "#D7DEE5", "grid_line_weight_pt": 0.35},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def map_shape(prefix: str, x: float, y: float, w: float, h: float, container_id: str, *, fill: str = "#BFD8E8", hot: str = "#D4573C") -> list[dict[str, Any]]:
+        return [
+            node(f"{prefix}_map_canvas", "process_box", x, y, w, h, "", fill="#F7FBFC", line="#C7D7E2", z=23, font_size=1, rounding=0.0, container_id=container_id),
+            polygon(f"{prefix}_land_1", x + 0.08 * w, y + 0.25 * h, 0.34 * w, 0.30 * h, [[0.02, 0.46], [0.30, 0.12], [0.72, 0.25], [0.90, 0.60], [0.42, 0.84]], fill=fill, line=fill, container_id=container_id, z=34),
+            polygon(f"{prefix}_land_2", x + 0.50 * w, y + 0.22 * h, 0.34 * w, 0.32 * h, [[0.08, 0.25], [0.38, 0.08], [0.84, 0.30], [0.72, 0.74], [0.22, 0.86]], fill=fill, line=fill, container_id=container_id, z=34),
+            polygon(f"{prefix}_hot_basin", x + 0.22 * w, y + 0.42 * h, 0.14 * w, 0.25 * h, [[0.22, 0.08], [0.76, 0.24], [0.82, 0.70], [0.40, 0.94], [0.04, 0.54]], fill=hot, line=hot, container_id=container_id, z=36),
+        ]
+
+    def line_plot(prefix: str, x: float, y: float, w: float, h: float, container_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        nodes_local: list[dict[str, Any]] = [node(f"{prefix}_frame", "process_box", x, y, w, h, "", fill="#FFFFFF", line="#C8C8C8", z=24, font_size=1, rounding=0.0, container_id=container_id)]
+        edges_local: list[dict[str, Any]] = []
+        for i in range(4):
+            yy = y + h * (0.18 + i * 0.20)
+            edges_local.append(edge(f"{prefix}_grid_{i}", x + 6, yy, x + w - 6, yy, route="horizontal", color="#D9D9D9", weight=0.55, arrow=False, z=28))
+        xs = [x + w * t for t in (0.06, 0.18, 0.30, 0.42, 0.54, 0.66, 0.78, 0.92)]
+        ys1 = [y + h * t for t in (0.42, 0.35, 0.48, 0.38, 0.44, 0.30, 0.34, 0.50)]
+        ys2 = [y + h * t for t in (0.62, 0.66, 0.58, 0.72, 0.61, 0.68, 0.55, 0.60)]
+        for idx, (xs0, ys0, xs1, ys1v) in enumerate(zip(xs, ys1, xs[1:], ys1[1:])):
+            edges_local.append(edge(f"{prefix}_line_a_{idx}", xs0, ys0, xs1, ys1v, route="straight", color="#A55B5B", weight=1.05, arrow=False, z=34, allow_diagonal=True))
+        for idx, (xs0, ys0, xs1, ys1v) in enumerate(zip(xs, ys2, xs[1:], ys2[1:])):
+            edges_local.append(edge(f"{prefix}_line_b_{idx}", xs0, ys0, xs1, ys1v, route="straight", color="#6A78A8", weight=1.05, arrow=False, z=34, allow_diagonal=True))
+        return nodes_local, edges_local
+
+    def data_stack(prefix: str, x: float, y: float, w: float, h: float, container_id: str, *, palette: list[str]) -> list[dict[str, Any]]:
+        sheets: list[dict[str, Any]] = []
+        for index, fill in enumerate(palette):
+            yy = y + index * 13
+            sheets.append(
+                polygon(
+                    f"{prefix}_sheet_{index}",
+                    x + index * 3,
+                    yy,
+                    w,
+                    h,
+                    [[0.16, 0.05], [1.00, 0.05], [0.84, 0.94], [0.00, 0.94]],
+                    fill=fill,
+                    line="#B0B8BE",
+                    container_id=container_id,
+                    z=25 + index,
+                )
+            )
+        return sheets
+
+    nodes: list[dict[str, Any]] = [
+        node("page_background", "page_background", 0, 0, base_w, base_h, "", fill="#FFFFFF", line="none", z=0),
+        band("datasets_band", 4, 14, 972, 166, "#E5F0FA"),
+        band("spei_band", 3, 221, 973, 275, "#EDF6E6"),
+        band("clustering_band", 4, 540, 973, 433, "#FFF0E2"),
+        band("influence_band", 3, 1014, 974, 263, "#E5F5FA"),
+    ]
+    edges: list[dict[str, Any]] = []
+
+    nodes.extend(
+        [
+            title_box("datasets_header", 378, 2, 228, 36, "Datasets input", "#C9DCEB", font_size=17),
+            label("meteorological_label", 55, 52, 190, 28, "Meteorological data", font_size=13.5, weight="bold", container_id="datasets_band"),
+            label("sst_label", 348, 52, 94, 28, "SST data", font_size=13.5, weight="bold", container_id="datasets_band"),
+            label("nino_label", 548, 52, 130, 28, "Nino 3.4 data", font_size=13.5, weight="bold", container_id="datasets_band"),
+            label("river_data_label", 771, 52, 174, 28, "River basins data", font_size=13.5, weight="bold", container_id="datasets_band"),
+        ]
+    )
+    nodes.extend(data_stack("meteo", 59, 81, 160, 88, "datasets_band", palette=["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"]))
+    for idx, x in enumerate((98, 132, 165)):
+        nodes.append(ellipse(f"meteo_dots_{idx}", x, 100 + idx * 12, 8, 8, fill="#BFD77B", line="#BFD77B", container_id="datasets_band", z=40))
+    nodes.extend(data_stack("sst", 292, 80, 158, 78, "datasets_band", palette=["#2C58B5", "#46A7D9", "#EAB347", "#F76D32", "#3465C7"]))
+    nodes.append(grid_matrix("nino_map_grid", 524, 78, 178, 90, rows=4, cols=8, colors=["#E9FBF2", "#88CF9A", "#27A078", "#2E83BC"], container_id="datasets_band", z=29))
+    nodes.extend(map_shape("river_data", 770, 78, 176, 91, "datasets_band", fill="#91B9D4", hot="#E45E34"))
+
+    nodes.append(title_box("spei_header", 328, 205, 322, 39, "Drought index SPEI-12", "#C8DDD2", font_size=16.5))
+    edges.append(edge("datasets_to_spei", 491, 180, 491, 205, route="vertical", color="#3698A8", weight=3.0, arrow_plan_id="A001"))
+    nodes.extend(
+        [
+            round_panel("drought_wet_panel", 18, 253, 386, 195, container_id="spei_band"),
+            label("drought_wet_title", 89, 272, 235, 32, "Drought-wet change", font_size=17, weight="bold", container_id="spei_band"),
+            dashed_box("pre_trend", 31, 308, 195, 48, "PRE trend", container_id="spei_band", font_size=14),
+            dashed_box("temporal_variation", 209, 308, 184, 48, "Temporal variation", container_id="spei_band", font_size=13),
+            dashed_box("pet_trend", 31, 379, 195, 48, "PET trend", container_id="spei_band", font_size=14),
+            dashed_box("spatial_patterns", 209, 379, 184, 48, "Spatial patterns", container_id="spei_band", font_size=13),
+            round_panel("river_basins_panel", 516, 253, 441, 232, container_id="spei_band"),
+            label("river_basins_title", 585, 266, 318, 34, "34 major global river basins", font_size=16, weight="bold", container_id="spei_band"),
+        ]
+    )
+    nodes.extend(map_shape("basin_map", 555, 317, 190, 104, "spei_band", fill="#B9C5CF", hot="#D65243"))
+    nodes.append(ellipse("basin_dot_a", 640, 354, 9, 9, fill="#8D9AA4", line="#8D9AA4", container_id="spei_band", z=40))
+    nodes.append(ellipse("basin_dot_b", 675, 365, 7, 7, fill="#8D9AA4", line="#8D9AA4", container_id="spei_band", z=40))
+    nodes.append(node("basin_colorbar", "process_box", 596, 414, 120, 10, "", fill="#C84138", line="#FFFFFF", z=40, container_id="spei_band", rounding=0.0))
+    nodes.append(node("basin_colorbar_blue", "process_box", 676, 414, 80, 10, "", fill="#3278A8", line="#FFFFFF", z=41, container_id="spei_band", rounding=0.0))
+    nodes.append(grid_matrix("river_basin_hydrograph_matrix", 758, 292, 162, 184, rows=7, cols=5, colors=["#FFFFFF", "#F8F4F8"], container_id="spei_band", z=24))
+    for r in range(7):
+        for c in range(5):
+            nodes.append(node(f"hydrograph_{r}_{c}", "process_box", 760 + c * 31, 292 + r * 26, 25, 17, "", fill="#FFFFFF", line="#C8C8C8", z=28, font_size=1, container_id="spei_band", rounding=0.0))
+            edges.append(edge(f"hydro_line_{r}_{c}", 764 + c * 31, 302 + r * 26, 781 + c * 31, 298 + r * 26 + (c % 2) * 3, route="straight", color="#A86D85", weight=0.65, arrow=False, z=38, allow_diagonal=True))
+    edges.append(edge("drought_change_to_basins", 404, 351, 516, 351, route="horizontal", color="#C5E483", weight=8.0, arrow_plan_id="A002"))
+    edges.append(edge("spei_to_clustering", 491, 496, 491, 531, route="vertical", color="#3698A8", weight=3.0, arrow_plan_id="A003"))
+
+    nodes.append(title_box("clustering_header", 300, 528, 362, 38, "3-D  Drought Clustering", "#F5D8C0", font_size=16.5))
+    nodes.extend(
+        [
+            dashed_box("thresholds_box", 33, 591, 323, 118, "Index threshold: -1\nArea threshold: 1.56%\nSpace-time domain :3x3x3", container_id="clustering_band", font_size=13.5, z=35),
+            node("drought_structure", "rounded_process", 386, 624, 154, 65, "Drought\nstructure", fill="#F39478", line="#F39478", z=34, font_size=15.5, container_id="clustering_band", rounding=0.07, weight="bold"),
+            grid_matrix("drought_cube_grid", 562, 589, 245, 106, rows=5, cols=8, colors=["#F3D071", "#DCEBD8", "#A4CDC4", "#E06B62", "#F4F4F4"], container_id="clustering_band", z=32),
+            round_panel("time_panel", 815, 578, 137, 139, container_id="clustering_band"),
+            label("time_n2", 851, 607, 88, 28, "Time n+2", font_size=13, container_id="clustering_band"),
+            label("time_n1", 851, 648, 88, 28, "Time n+1", font_size=13, container_id="clustering_band"),
+            label("time_n", 851, 687, 72, 28, "Time n", font_size=13, container_id="clustering_band"),
+        ]
+    )
+    edges.append(edge("thresholds_to_structure", 356, 650, 386, 650, route="horizontal", color="#BC7B52", weight=2.2))
+    edges.append(edge("structure_to_cube", 540, 654, 562, 640, route="straight", color="#BC7B52", weight=2.0, allow_diagonal=True))
+    edges.append(edge("cube_to_time", 807, 647, 815, 647, route="horizontal", color="#BC7B52", weight=4.0))
+    edges.append(edge("cluster_cycle_top", 364, 612, 426, 612, route="straight", points=[[376, 585], [410, 585]], color="#C7875D", weight=2.0))
+    edges.append(edge("cluster_cycle_bottom", 489, 690, 435, 705, route="straight", points=[[470, 724], [435, 705]], color="#C7875D", weight=2.0))
+    edges.append(edge("cluster_mid_separator", 13, 742, 969, 742, route="horizontal", color="#C99875", weight=1.1, arrow=False, z=25))
+
+    nodes.extend(
+        [
+            round_panel("event_characteristics_panel", 16, 760, 473, 188, container_id="clustering_band"),
+            label("event_characteristics_title", 73, 778, 336, 31, "Drought event characteristics", font_size=15.5, weight="bold", container_id="clustering_band"),
+            dashed_box("drought_duration", 28, 810, 216, 50, "Drought duration", container_id="clustering_band", font_size=12.5),
+            dashed_box("drought_displacements", 229, 810, 234, 50, "Drought displacements", container_id="clustering_band", font_size=12.5),
+            dashed_box("drought_number", 28, 878, 216, 50, "Drought number", container_id="clustering_band", font_size=12.5),
+            dashed_box("drought_area", 229, 878, 234, 50, "Drought area", container_id="clustering_band", font_size=12.5),
+            label("spatial_distribution", 515, 788, 94, 57, "Spatial\ndistribution", font_size=13.5, weight="bold", container_id="clustering_band"),
+            label("comparative_analysis", 500, 867, 130, 64, "Comparative\nanalysis", font_size=13.5, weight="bold", container_id="clustering_band"),
+            dashed_box("typical_event", 632, 784, 313, 75, "Spatiotemporal structure of\ntypical drought event", container_id="clustering_band", font_size=12.5),
+            dashed_box("koppen_box", 632, 859, 313, 75, "The Koppen-Geiger climate\nclassification", container_id="clustering_band", font_size=12.5),
+        ]
+    )
+    nodes.append(node("comparison_icon", "process_box", 540, 846, 27, 23, "", fill="#E3714A", line="#E3714A", z=40, container_id="clustering_band", rounding=0.04))
+    for x, side in [(488, "left"), (618, "right")]:
+        nodes.append(label(f"analysis_brace_{side}", x, 828, 18, 88, "}", font_size=32, weight="bold", container_id="clustering_band", color="#D17A55"))
+    edges.append(edge("clustering_to_influence", 491, 973, 491, 1005, route="vertical", color="#3698A8", weight=3.0, arrow_plan_id="A004"))
+
+    nodes.append(title_box("influence_header", 286, 1004, 403, 37, "Influencing factors of drought", "#9EDAE3", font_size=16.5))
+    nodes.extend(
+        [
+            round_panel("mca_panel", 23, 1077, 427, 137, container_id="influence_band"),
+            label("mca_title", 67, 1094, 344, 31, "Maximum covariance analysis", font_size=15.2, weight="bold", container_id="influence_band"),
+            dashed_box("mca_sst", 64, 1138, 88, 48, "SST", container_id="influence_band", font_size=13),
+            dashed_box("mca_drought", 193, 1138, 97, 48, "Drought", container_id="influence_band", font_size=13),
+            dashed_box("mca_enso", 325, 1138, 93, 48, "ENSO", container_id="influence_band", font_size=13),
+            label("mca_patterns_title", 473, 1057, 490, 30, "Spatiotemporal patterns of the MCA2 mode", font_size=15.0, weight="bold", container_id="influence_band"),
+        ]
+    )
+    edges.append(edge("sst_to_drought", 152, 1162, 193, 1162, route="horizontal", color="#0B6F94", weight=3.0, arrow_plan_id="A005"))
+    edges.append(edge("enso_to_drought", 325, 1162, 290, 1162, route="horizontal", color="#0B6F94", weight=3.0, arrow_plan_id="A006"))
+    edges.append(edge("mca_to_patterns", 450, 1150, 527, 1150, route="horizontal", color="#0B6F94", weight=5.0, arrow_plan_id="A007"))
+    line_plot_nodes, line_plot_edges = line_plot("mca_line_plot", 540, 1086, 386, 76, "influence_band")
+    nodes.extend(line_plot_nodes)
+    edges.extend(line_plot_edges)
+    nodes.append(grid_matrix("mca_sst_map", 548, 1171, 181, 62, rows=4, cols=8, colors=["#C3312E", "#F6C9A8", "#FFFFFF", "#7AB6D8"], container_id="influence_band", z=31))
+    nodes.extend(map_shape("mca_world_map", 746, 1171, 185, 62, "influence_band", fill="#BFD4E2", hot="#C84B3F"))
+    nodes.append(node("mca_colorbar_red", "process_box", 660, 1242, 121, 10, "", fill="#B42028", line="#FFFFFF", z=40, container_id="influence_band", rounding=0.0))
+    nodes.append(node("mca_colorbar_blue", "process_box", 781, 1242, 94, 10, "", fill="#2E79B7", line="#FFFFFF", z=40, container_id="influence_band", rounding=0.0))
+
+    edges.append(edge("influence_to_final", 491, 1277, 491, 1304, route="vertical", color="#3698A8", weight=3.0, arrow_plan_id="A008"))
+    nodes.append(
+        node(
+            "final_identification",
+            "rounded_process",
+            39,
+            1312,
+            902,
+            58,
+            "Identification and contrast of meteorological drought of global river basins",
+            fill="#F3F3EF",
+            line="#F3F3EF",
+            z=28,
+            font_size=15,
+            rounding=0.06,
+            weight="bold",
+        )
+    )
+
+    arrow_plan = [
+        {"id": "A001", "from": "Datasets input", "to": "Drought index SPEI-12", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A002", "from": "Drought-wet change", "to": "34 major global river basins", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A003", "from": "Drought index SPEI-12", "to": "3-D Drought Clustering", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A004", "from": "Drought event characteristics", "to": "Influencing factors of drought", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A005", "from": "SST", "to": "Drought", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A006", "from": "ENSO", "to": "Drought", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A007", "from": "Maximum covariance analysis", "to": "Spatiotemporal patterns of the MCA2 mode", "route_shape": "straight_horizontal", "semantic_intent": "data_flow", "certainty": "high"},
+        {"id": "A008", "from": "Influencing factors of drought", "to": "Identification and contrast", "route_shape": "straight_vertical", "semantic_intent": "data_flow", "certainty": "high"},
+    ]
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.drought_basin_workflow",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "drought_basin_workflow",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_drought_basin_workflow_template",
+                "diagram_family": "meteorological_drought_global_river_basin_workflow",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_visible_ocr_labels_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "datasets_band", "category": "input", "source_bbox_px": [4, 14, 976, 180], "required_visible_labels": ["Datasets input", "Meteorological data", "SST data", "Nino 3.4 data", "River basins data"]},
+                    {"id": "spei_band", "category": "core", "source_bbox_px": [3, 221, 976, 496], "required_visible_labels": ["Drought index SPEI-12", "Drought-wet change", "34 major global river basins"]},
+                    {"id": "clustering_band", "category": "core", "source_bbox_px": [4, 540, 977, 973], "required_visible_labels": ["3-D Drought Clustering", "Drought structure", "Drought event characteristics"]},
+                    {"id": "influence_band", "category": "output", "source_bbox_px": [3, 1014, 977, 1277], "required_visible_labels": ["Influencing factors of drought", "Maximum covariance analysis", "Spatiotemporal patterns of the MCA2 mode"]},
+                    {"id": "final_identification", "category": "output", "source_bbox_px": [39, 1312, 941, 1370], "required_visible_labels": ["Identification and contrast of meteorological drought of global river basins"]},
+                ],
+            },
+            "region_plan": [
+                {"id": "datasets_band", "category": "input", "source_bbox_px": [4, 14, 976, 180]},
+                {"id": "spei_band", "category": "core", "source_bbox_px": [3, 221, 976, 496]},
+                {"id": "clustering_band", "category": "core", "source_bbox_px": [4, 540, 977, 973]},
+                {"id": "influence_band", "category": "output", "source_bbox_px": [3, 1014, 977, 1277]},
+                {"id": "final_identification", "category": "output", "source_bbox_px": [39, 1312, 941, 1370]},
+            ],
+            "arrow_plan": arrow_plan,
+            "notes": [
+                "Editable semantic reconstruction for meteorological drought and global river-basin workflow figures.",
+                "Dataset stacks, SPEI modules, 3-D clustering, drought-event characteristics, MCA causal boxes, map panels, line plots, and main flow arrows are Visio-editable objects.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_scene(
     image_path: Path,
     *,
@@ -5233,6 +5737,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_drought_basin_workflow_figure(ocr_items, width, height):
+        scene = build_drought_basin_workflow_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_remote_sensing_rsei_workflow_figure(ocr_items, width, height):
         scene = build_remote_sensing_rsei_workflow_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"

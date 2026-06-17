@@ -442,6 +442,78 @@ def test_remote_sensing_rsei_workflow_uses_editable_template(tmp_path: Path, mon
     assert len(scene["edges"]) >= 34
 
 
+def test_drought_basin_workflow_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "drought_basin_workflow.png"
+    Image.new("RGB", (981, 1417), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Datasets input",
+            "Meteorological data",
+            "SST data",
+            "Nino 3.4 data",
+            "River basins data",
+            "Drought index SPEI-12",
+            "Drought-wet change",
+            "PRE trend",
+            "Temporal variation",
+            "PET trend",
+            "Spatial patterns",
+            "34 major global river basins",
+            "3-D Drought Clustering",
+            "Index threshold: -1",
+            "Area threshold: 1.56%",
+            "Space-time domain :3x3x3",
+            "Drought structure",
+            "Time n+2",
+            "Drought event characteristics",
+            "Drought duration",
+            "Drought displacements",
+            "Drought number",
+            "Drought area",
+            "Spatiotemporal structure of typical drought event",
+            "The Koppen-Geiger climate classification",
+            "Influencing factors of drought",
+            "Maximum covariance analysis",
+            "SST",
+            "Drought",
+            "ENSO",
+            "Spatiotemporal patterns of the MCA2 mode",
+            "Identification and contrast of meteorological drought of global river basins",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = [node.get("type") for node in scene["nodes"]]
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.drought_basin_workflow"
+    assert scene["metadata"]["architecture_template"] == "drought_basin_workflow"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types.count("group_container") >= 4
+    assert node_types.count("rounded_process") >= 20
+    assert node_types.count("grid_matrix") >= 4
+    assert node_types.count("polygon_node") >= 12
+    assert node_types.count("ellipse_node") >= 4
+    for label in [
+        "Datasets input",
+        "Drought index SPEI-12",
+        "Drought-wet change",
+        "34 major global river basins",
+        "3-D  Drought Clustering",
+        "Drought event characteristics",
+        "Influencing factors of drought",
+        "Maximum covariance analysis",
+        "Spatiotemporal patterns of the MCA2 mode",
+        "Identification and contrast of meteorological drought of global river basins",
+    ]:
+        assert label in texts
+    assert len(scene["edges"]) >= 45
+
+
 def test_channel_attention_recalibration_uses_editable_shape_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "channel_attention.png"
     Image.new("RGB", (981, 469), "white").save(source)

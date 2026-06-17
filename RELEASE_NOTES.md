@@ -1,3 +1,22 @@
+# Fig4Visio v0.3.11 Release Notes
+
+This update adds a generalized semantic reconstruction path for meteorological drought and global river-basin workflow figures. The selector uses combined OCR signals such as `Datasets input`, `Drought index SPEI-12`, `Drought-wet change`, `34 major global river basins`, `3-D Drought Clustering`, `Drought event characteristics`, `Influencing factors of drought`, `Maximum covariance analysis`, `SST`, `ENSO`, and `MCA2`; it is not tied to a filename or image hash.
+
+## Core Updates
+
+- Added `drought_basin_workflow` detection and editable reconstruction.
+- Rebuilds dataset stacks, SPEI-12 workflow panels, drought-wet change boxes, global river-basin map/chart motifs, 3-D drought clustering, drought event characteristics, MCA factor analysis, spatiotemporal pattern plots, and final identification/contrast banner as Visio-editable objects.
+- Handles common OCR confusion such as `SPEI` read as `SPEl`.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage requiring semantic editable components, key labels, main arrows, and no raster embedding.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 22 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `dist\Fig4VisioGUI.exe --smoke`: passed
+- User-provided drought workflow image: GUI workflow passed on the first round, screenshot self-check score `0.542`, `download_allowed=True`, and no image embedding (`assets=0`, `image_tiles=0`).
+
 # Fig4Visio v0.3.10 Release Notes
 
 This update adds a generalized semantic reconstruction path for remote-sensing RSEI workflow diagrams with data-source lanes, driver layers, GEE-based RSEI extraction, PLS-SEM path modeling, spatial auto-correlation panels, and RSEI change analysis. The selector uses combined OCR signals such as `RSEI`, `NDVI`, `NDSI`, `WET`, `LST`, `PLS-SEM`, `Landsat`, `Water Mask`, `Driver Layer`, and `Global spatial auto-correlation`; it is not tied to a filename or image hash.
