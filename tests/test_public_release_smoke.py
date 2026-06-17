@@ -268,6 +268,51 @@ def test_gui_selects_semantic_attempt_before_diagnostic_trace() -> None:
     assert reason == "best_semantic_failed_self_check"
 
 
+def test_gui_retry_sequence_runs_five_rounds_after_initial_three() -> None:
+    modes = gui_app.reconstruction_modes()
+
+    assert len(modes) == 5
+    assert modes[:3] == ["standard", "vector_trace", "vector_trace_dense"]
+    assert modes[3:] == ["standard", "vector_trace_dense"]
+
+
+def test_gui_forces_download_after_five_failed_non_embedded_attempts() -> None:
+    attempts = [
+        {
+            "round": index + 1,
+            "passed": False,
+            "self_check_score": 0.2 + index * 0.01,
+            "no_image_embedding": True,
+            "semantic_gate_passed": False,
+        }
+        for index in range(gui_app.MAX_AUTO_ATTEMPTS)
+    ]
+    selected = attempts[-1]
+
+    assert gui_app.should_force_output_after_retries(attempts, selected) is True
+
+
+def test_gui_does_not_force_download_when_embedding_detected() -> None:
+    attempts = [
+        {"round": index + 1, "passed": False, "self_check_score": 0.2, "no_image_embedding": False}
+        for index in range(gui_app.MAX_AUTO_ATTEMPTS)
+    ]
+
+    assert gui_app.should_force_output_after_retries(attempts, attempts[-1]) is False
+
+
+def test_gui_forced_output_summary_keeps_failure_visible() -> None:
+    summary = gui_app.format_forced_output_summary(
+        {"passed": False, "category": "diagnostic_vector_trace", "reason": "线稿追踪只是诊断稿"},
+        {"score": 0.31, "threshold": 0.38},
+        [{} for _ in range(gui_app.MAX_AUTO_ATTEMPTS)],
+    )
+
+    assert "强制输出" in summary
+    assert "未完全达标" in summary
+    assert "diagnostic_vector_trace" in summary
+
+
 def test_swin_transformer_architecture_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "swin_arch.png"
     Image.new("RGB", (1148, 355), "white").save(source)

@@ -1,3 +1,24 @@
+# Fig4Visio v0.3.13 Release Notes
+
+This update changes the GUI retry policy to match the requested "try five times, then output the best current files" workflow. The result is not mislabeled as passed: if the output is forced after failed checks, the quality report marks it as `forced_output_after_retries`.
+
+## Core Updates
+
+- Increased GUI automatic attempts from 3 to 5.
+- Retry sequence is now `standard -> vector_trace -> vector_trace_dense -> standard -> vector_trace_dense`.
+- After the initial 3 attempts fail to meet the download condition, the GUI logs that it is running 2 additional attempts.
+- If all 5 attempts still fail but the selected output has no image embedding, the GUI enables download for the best current files.
+- Forced outputs are labeled `强制输出：未达标但可下载` and keep the self-check score, threshold, semantic gate category, and failure reason in `quality_report.json` and `quality_report.md`.
+- Outputs with detected image embedding are still blocked and cannot be forced.
+
+## Verification
+
+- Added regression tests for the 5-round retry sequence, forced-output gating, embedding-block protection, and forced-output summary wording.
+- `python -m pytest tests\test_public_release_smoke.py -q`: 30 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- Full GUI workflow on a previously blocked sample ran 5 attempts and returned `forced_output_after_retries`, `download_allowed=True`, `forced_output=True`, selected score `0.3234` against threshold `0.38`.
+
 # Fig4Visio v0.3.12 Release Notes
 
 This update changes the GUI workflow from a screenshot-only gate to a semantic delivery gate. A result is now downloadable only when it has no raster/image embedding, passes screenshot self-check, and passes a semantic module reconstruction gate. Dense vector tracing and generic auto drafts are explicitly treated as diagnostic or blocked outputs, not successful Visio reconstruction.

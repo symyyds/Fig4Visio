@@ -9,7 +9,7 @@ Fig4Visio 是一个 Windows 优先的图片转可编辑 Visio 工具。它的目
 - 上传 PNG/JPG/JPEG/BMP/WEBP 图片。
 - 自动重建为可编辑 Visio `.vsdx`。
 - 同时导出预览 `.png` 和 `.svg`。
-- 自动截图自检：比较源图和 Visio 导出图，失败时自动换策略重跑。
+- 自动截图自检：比较源图和 Visio 导出图，失败时自动换策略重跑；最多运行 5 轮。
 - 语义模块门槛：明确区分类别模板、稀疏模块流、通用草图和线稿追踪；通用草图和线稿追踪不能作为可下载成功结果。
 - 防贴图检查：扫描 `scene.json` 和 `.vsdx`，发现 `image_tile`、`assets`、`ForeignData`、`/media/` 等图片嵌入时禁止下载。
 - 图标矢量复现：云、数据库、用户、搜索、设备、模块图标等非传统流程图形状会尽量拆成 `polygon_node` 和 `line_segment`，保持可编辑。
@@ -24,8 +24,10 @@ Fig4Visio 是一个 Windows 优先的图片转可编辑 Visio 工具。它的目
 - 不允许整张原图嵌入 Visio。
 - GUI 默认不生成 raster tile。
 - 生成后必须导出 PNG 截图并跑自检。
-- 截图自检失败会自动尝试 `standard -> vector_trace -> vector_trace_dense`，其中 `vector_trace` 只作为诊断轮次，不作为交付成功。
-- 只有截图自检通过、确认没有图片嵌入，并且通过语义模块门槛时，GUI 才允许下载。
+- 截图自检失败会先尝试 `standard -> vector_trace -> vector_trace_dense`；前三轮仍未达标时追加两轮 `standard -> vector_trace_dense`。
+- `vector_trace` 仍只作为诊断轮次，不作为“自检通过”的证据。
+- 只有截图自检通过、确认没有图片嵌入，并且通过语义模块门槛时，GUI 会标记为通过。
+- 如果 5 轮后仍未达标，但没有检测到图片嵌入，GUI 会强制输出现有最佳文件并开放下载；质量报告会标记为 `forced_output_after_retries`，需要人工复核后使用。
 
 对复杂论文图、小字号公式、照片、热力图、真实截图类输入，系统会尽量拆成可编辑对象，但局部细节可能是粗略矢量重建。
 

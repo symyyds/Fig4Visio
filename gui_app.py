@@ -27,7 +27,15 @@ from PIL import Image, ImageTk
 APP_NAME = "Fig4Visio GUI"
 MAX_PREVIEW_SIZE = (820, 560)
 SELF_CHECK_THRESHOLD = 0.38
-MAX_AUTO_ATTEMPTS = 3
+INITIAL_AUTO_ATTEMPTS = 3
+MAX_AUTO_ATTEMPTS = 5
+RECONSTRUCTION_MODE_SEQUENCE = [
+    "standard",
+    "vector_trace",
+    "vector_trace_dense",
+    "standard",
+    "vector_trace_dense",
+]
 
 
 def runtime_root() -> Path:
@@ -624,6 +632,23 @@ def format_semantic_gate_failure_summary(
     return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 低于阈值 {threshold:.2f}，且模块复现门槛未通过（{category}）：{reason}"
 
 
+def format_forced_output_summary(
+    semantic_gate: dict[str, object],
+    self_check_report: dict[str, object],
+    attempts: list[dict[str, object]],
+) -> str:
+    score = float(self_check_report.get("score", 0.0) or 0.0)
+    threshold = float(self_check_report.get("threshold", SELF_CHECK_THRESHOLD) or SELF_CHECK_THRESHOLD)
+    category = str(semantic_gate.get("category") or "semantic_gate_unknown")
+    reason = str(semantic_gate.get("reason") or "模块门槛未完全通过")
+    if score >= threshold and bool(semantic_gate.get("passed")):
+        return f"已自动重跑 {len(attempts)} 轮；当前结果已达到下载条件，评分 {score:.3f}。"
+    return (
+        f"已自动重跑 {len(attempts)} 轮；最佳结果仍未完全达标，截图评分 {score:.3f} / 阈值 {threshold:.2f}；"
+        f"模块门槛={category}。按当前工作流强制输出现有文件供下载，请人工复核后使用。原因：{reason}"
+    )
+
+
 def write_quality_report(
     *,
     scene_path: Path,
@@ -641,6 +666,7 @@ def write_quality_report(
     download_allowed: bool,
     no_image_embedding: bool,
     semantic_gate: dict[str, object],
+    forced_output: bool = False,
 ) -> tuple[Path, Path, str, str, str]:
     quality_dir.mkdir(parents=True, exist_ok=True)
     scene = read_json(scene_path)
@@ -651,6 +677,10 @@ def write_quality_report(
         status = "blocked_embedding_detected"
         label = "未通过：检测到图片嵌入"
         summary = "本次结果含有图片嵌入痕迹，不允许下载。"
+    elif forced_output:
+        status = "forced_output_after_retries"
+        label = "强制输出：未达标但可下载"
+        summary = format_forced_output_summary(semantic_gate, self_check_report, attempts)
     elif not bool(semantic_gate.get("passed")):
         status = "semantic_gate_failed"
         label = "未通过：不是模块复现"
@@ -670,6 +700,7 @@ def write_quality_report(
         "label": label,
         "summary": summary,
         "download_allowed": download_allowed,
+        "forced_output": forced_output,
         "metrics": metrics,
         "self_check": self_check_report,
         "semantic_gate": semantic_gate,
@@ -693,6 +724,7 @@ def write_quality_report(
             "semantic_module_gate",
             "retry_with_vector_trace_as_diagnostic_only",
             "allow_download_only_after_screenshot_and_semantic_gate_pass",
+            "force_output_after_five_attempts_when_no_embedding",
         ],
     }
     quality_json = quality_dir / "quality_report.json"
@@ -704,6 +736,7 @@ def write_quality_report(
         f"- 状态: {label}",
         f"- 结论: {summary}",
         f"- 是否允许下载: {download_allowed}",
+        f"- 是否强制输出: {forced_output}",
         f"- 模块复现门槛: {semantic_gate.get('category')} / {semantic_gate.get('reason')}",
         f"- 自检对比图: `{self_check_png}`",
         f"- Scene: `{scene_path}`",
@@ -808,6 +841,10 @@ def attempt_score(attempt: dict[str, object]) -> float:
     return float(attempt.get("self_check_score", 0.0) or 0.0)
 
 
+def reconstruction_modes() -> list[str]:
+    return RECONSTRUCTION_MODE_SEQUENCE[:MAX_AUTO_ATTEMPTS]
+
+
 def select_attempt_for_delivery(attempts: list[dict[str, object]]) -> tuple[dict[str, object] | None, str]:
     for attempt in attempts:
         if attempt.get("passed"):
@@ -820,6 +857,12 @@ def select_attempt_for_delivery(attempts: list[dict[str, object]]) -> tuple[dict
     return None, "none"
 
 
+def should_force_output_after_retries(attempts: list[dict[str, object]], selected: dict[str, object] | None) -> bool:
+    if selected is None or selected.get("passed"):
+        return False
+    return len(attempts) >= MAX_AUTO_ATTEMPTS and bool(selected.get("no_image_embedding"))
+
+
 def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
     run_root = Path.cwd() / "work" / "gui_runs"
     run_dir = run_root / time.strftime("%Y%m%d_%H%M%S")
@@ -830,7 +873,7 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
     staged_source, source_manifest = stage_source_image(source_path, run_dir, basename)
     log(f"原图已固定: {staged_source}")
 
-    modes = ["standard", "vector_trace", "vector_trace_dense"][:MAX_AUTO_ATTEMPTS]
+    modes = reconstruction_modes()
     attempts: list[dict[str, object]] = []
 
     for index, mode in enumerate(modes, 1):
@@ -847,18 +890,21 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
             log(f"第 {index} 轮已通过自检，停止重跑。")
             break
         if index < len(modes):
-            log("截图差距过大，自动切换策略重跑一轮...")
+            if index == INITIAL_AUTO_ATTEMPTS:
+                log("前三轮仍未达到下载条件，继续追加两轮复现尝试...")
+            else:
+                log("截图差距过大，自动切换策略重跑一轮...")
 
     selected, selection_reason = select_attempt_for_delivery(attempts)
     if selected is None:
         raise RuntimeError("没有生成任何可评估的输出。")
     if not selected.get("passed"):
         if selection_reason == "best_semantic_failed_self_check":
-            log("所有自动轮次均未同时通过截图和模块门槛；保留最佳模块复现轮次但禁止下载。")
+            log("所有自动轮次均未同时通过截图和模块门槛；保留最佳模块复现轮次。")
         elif selection_reason == "best_diagnostic_no_semantic":
-            log("没有生成合格模块复现轮次；仅保留诊断轮次并禁止下载。")
+            log("没有生成合格模块复现轮次；仅保留诊断轮次。")
         else:
-            log("所有自动轮次均未通过；保留最佳轮次但禁止下载。")
+            log("所有自动轮次均未通过；保留最佳轮次。")
 
     attempt_dir = Path(selected["attempt_dir"])
     scene_path = Path(selected["scene"])
@@ -875,8 +921,11 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
     review_manifest, pair_preview, review_log = make_review_bundle(staged_source, png_path, scene_path, review_dir, basename)
     log(review_log)
 
-    download_allowed = bool(selected["passed"])
     no_image_embedding = bool(selected["no_image_embedding"])
+    forced_output = should_force_output_after_retries(attempts, selected)
+    download_allowed = bool(selected["passed"] or forced_output)
+    if forced_output:
+        log("5 轮后仍未完全达标；按设置强制输出现有最佳文件，并在质量报告中标记未达标。")
     quality_json, quality_md, status, label, summary = write_quality_report(
         scene_path=scene_path,
         source_image=staged_source,
@@ -893,6 +942,7 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
         download_allowed=download_allowed,
         no_image_embedding=no_image_embedding,
         semantic_gate=selected["semantic_gate"],
+        forced_output=forced_output,
     )
     log(f"{label}: {summary}")
 
