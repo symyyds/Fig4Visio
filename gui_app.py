@@ -348,7 +348,144 @@ def scene_quality_metrics(scene: dict, source_image: Path) -> dict[str, object]:
         "source_embedding_policy": metadata.get("source_embedding_policy"),
         "quality_claim": metadata.get("quality_claim"),
         "reconstruction_mode": metadata.get("gui_reconstruction_mode", metadata.get("reconstruction_mode")),
+        "created_by": metadata.get("created_by"),
+        "fidelity": metadata.get("fidelity"),
+        "architecture_template": metadata.get("architecture_template"),
     }
+
+
+DIAGNOSTIC_RECONSTRUCTION_MODES = {
+    "trace",
+    "trace_dense",
+    "vector_trace",
+    "vector_trace_dense",
+    "fallback",
+    "dense",
+    "high_recall",
+}
+
+SEMANTIC_NODE_TYPES = {
+    "annotation_block",
+    "brace_merge",
+    "branch_trunk",
+    "caption_block",
+    "classifier_head",
+    "concat_operator",
+    "cuboid_node",
+    "dashed_region",
+    "feature_map_banded",
+    "feature_map_grid",
+    "feature_vector_stack",
+    "formula_text_block",
+    "grid_matrix",
+    "group_container",
+    "input_output",
+    "junction_bus",
+    "layer_sequence",
+    "loss_region",
+    "math_label_box",
+    "math_text",
+    "math_vector",
+    "merge_bus",
+    "multi_port_junction",
+    "operator_node",
+    "polygon_node",
+    "process_box",
+    "rounded_process",
+    "tensor_stack",
+    "text_pill",
+    "token_grid",
+    "trapezoid_node",
+}
+
+
+def semantic_reconstruction_gate(
+    scene: dict,
+    *,
+    mode: str | None,
+    no_image_embedding: bool,
+) -> dict[str, object]:
+    metadata = scene.get("metadata", {}) if isinstance(scene.get("metadata"), dict) else {}
+    nodes = [node for node in scene.get("nodes", []) if isinstance(node, dict)]
+    edges = [edge for edge in scene.get("edges", []) if isinstance(edge, dict)]
+    assets = [asset for asset in scene.get("assets", []) if isinstance(asset, dict)]
+    mode_name = str(mode or metadata.get("gui_reconstruction_mode") or metadata.get("reconstruction_mode") or "").lower()
+    reconstruction_mode = str(metadata.get("reconstruction_mode") or "").lower()
+    created_by = str(metadata.get("created_by") or "")
+    created_by_lower = created_by.lower()
+    fidelity = str(metadata.get("fidelity") or "")
+    fidelity_lower = fidelity.lower()
+    architecture_template = str(metadata.get("architecture_template") or "").strip()
+    image_tiles = [node for node in nodes if node.get("type") == "image_tile"]
+    visible_nodes = [
+        node
+        for node in nodes
+        if node.get("type") not in {"page_background", "audit_region"}
+        and not str(node.get("id", "")).lower().endswith("background")
+    ]
+    text_nodes = [node for node in visible_nodes if str(node.get("text", node.get("symbol", ""))).strip()]
+    module_nodes = [node for node in visible_nodes if str(node.get("type") or "") in SEMANTIC_NODE_TYPES]
+    icon_parts = sum(1 for node in nodes if node.get("semantic_role") == "editable_icon_polygon")
+    icon_parts += sum(1 for edge in edges if edge.get("semantic_role") == "editable_icon_stroke")
+    non_icon_line_segments = [
+        edge
+        for edge in edges
+        if edge.get("type") == "line_segment" and edge.get("semantic_role") != "editable_icon_stroke"
+    ]
+
+    detail = {
+        "mode": mode_name,
+        "created_by": created_by,
+        "fidelity": fidelity,
+        "architecture_template": architecture_template,
+        "visible_nodes": len(visible_nodes),
+        "semantic_nodes": len(module_nodes),
+        "text_nodes": len(text_nodes),
+        "edges": len(edges),
+        "non_icon_line_segments": len(non_icon_line_segments),
+        "icon_parts": icon_parts,
+        "assets": len(assets),
+        "image_tiles": len(image_tiles),
+    }
+
+    def fail(category: str, reason: str) -> dict[str, object]:
+        return {"passed": False, "category": category, "reason": reason, **detail}
+
+    def ok(category: str, reason: str) -> dict[str, object]:
+        return {"passed": True, "category": category, "reason": reason, **detail}
+
+    if not no_image_embedding:
+        return fail("image_embedding", "检测到图片嵌入或原图贴片，不是可编辑模块复现。")
+    if assets or image_tiles:
+        return fail("raster_tiles", "检测到局部图片贴片；当前 GUI 工作流要求完全可编辑对象。")
+    if (
+        mode_name in DIAGNOSTIC_RECONSTRUCTION_MODES
+        or reconstruction_mode in DIAGNOSTIC_RECONSTRUCTION_MODES
+        or ".vector_trace" in created_by_lower
+        or fidelity_lower == "auto_editable_vector_trace_draft"
+    ):
+        return fail("diagnostic_vector_trace", "线稿追踪只是诊断稿，不能算语义模块复现。")
+    if architecture_template:
+        return ok("semantic_template", f"已匹配类别策略 `{architecture_template}`。")
+    if created_by_lower.endswith(".semantic_template") or fidelity_lower == "semantic_editable_rebuild":
+        return ok("semantic_template", "已使用语义模板重建。")
+    if created_by_lower.endswith(".clean_flow"):
+        max_generic_edges = min(240, max(90, len(module_nodes) * 3))
+        max_trace_segments = max(40, len(module_nodes) * 2)
+        if (
+            3 <= len(module_nodes) <= 90
+            and (text_nodes or icon_parts >= 12)
+            and len(edges) <= max_generic_edges
+            and len(non_icon_line_segments) <= max_trace_segments
+        ):
+            return ok("generic_module_flow", "已生成 OCR/形状锚定的模块化流程图。")
+        return fail(
+            "weak_generic_flow",
+            "只得到弱通用流程草图，模块数、文本锚点或线段密度不符合可交付标准。",
+        )
+    if created_by_lower == "fig4visio.image_auto_scene":
+        return fail("generic_auto_draft", "只得到自动轮廓/图标矢量草图，未匹配到类别策略或稳定模块流。")
+    return fail("no_semantic_strategy", "未匹配到可交付的类别策略；不能只靠自动轮廓/线条结果放行。")
 
 
 def inspect_vsdx_for_images(vsdx_path: Path) -> dict[str, object]:
@@ -473,6 +610,20 @@ def format_self_check_failure_summary(self_check_report: dict[str, object], atte
     return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 已达到阈值 {threshold:.2f}，但自检状态仍为失败，请查看对比图。"
 
 
+def format_semantic_gate_failure_summary(
+    semantic_gate: dict[str, object],
+    self_check_report: dict[str, object],
+    attempts: list[dict[str, object]],
+) -> str:
+    score = float(self_check_report.get("score", 0.0) or 0.0)
+    threshold = float(self_check_report.get("threshold", SELF_CHECK_THRESHOLD) or SELF_CHECK_THRESHOLD)
+    reason = str(semantic_gate.get("reason") or "未达到语义模块复现门槛")
+    category = str(semantic_gate.get("category") or "semantic_gate_failed")
+    if score >= threshold:
+        return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 已达到阈值 {threshold:.2f}，但模块复现门槛未通过（{category}）：{reason}"
+    return f"已自动重跑 {len(attempts)} 轮；最佳截图评分 {score:.3f} 低于阈值 {threshold:.2f}，且模块复现门槛未通过（{category}）：{reason}"
+
+
 def write_quality_report(
     *,
     scene_path: Path,
@@ -489,6 +640,7 @@ def write_quality_report(
     attempts: list[dict[str, object]],
     download_allowed: bool,
     no_image_embedding: bool,
+    semantic_gate: dict[str, object],
 ) -> tuple[Path, Path, str, str, str]:
     quality_dir.mkdir(parents=True, exist_ok=True)
     scene = read_json(scene_path)
@@ -499,10 +651,14 @@ def write_quality_report(
         status = "blocked_embedding_detected"
         label = "未通过：检测到图片嵌入"
         summary = "本次结果含有图片嵌入痕迹，不允许下载。"
+    elif not bool(semantic_gate.get("passed")):
+        status = "semantic_gate_failed"
+        label = "未通过：不是模块复现"
+        summary = format_semantic_gate_failure_summary(semantic_gate, self_check_report, attempts)
     elif download_allowed:
         status = "self_check_passed"
         label = "自检通过：可以下载"
-        summary = f"截图自检通过，评分 {score:.3f}，已确认没有图片嵌入。"
+        summary = f"截图自检通过，评分 {score:.3f}，已确认没有图片嵌入，并通过模块复现门槛。"
     else:
         status = "self_check_failed"
         label = "自检未通过：禁止下载"
@@ -516,6 +672,7 @@ def write_quality_report(
         "download_allowed": download_allowed,
         "metrics": metrics,
         "self_check": self_check_report,
+        "semantic_gate": semantic_gate,
         "attempts": attempts,
         "paths": {
             "source_image": str(source_image.resolve()),
@@ -533,8 +690,9 @@ def write_quality_report(
             "generate_editable_scene_without_image_embedding",
             "render_visio_outputs",
             "screenshot_self_check",
-            "retry_with_vector_trace_when_failed",
-            "allow_download_only_after_self_check_pass",
+            "semantic_module_gate",
+            "retry_with_vector_trace_as_diagnostic_only",
+            "allow_download_only_after_screenshot_and_semantic_gate_pass",
         ],
     }
     quality_json = quality_dir / "quality_report.json"
@@ -546,6 +704,7 @@ def write_quality_report(
         f"- 状态: {label}",
         f"- 结论: {summary}",
         f"- 是否允许下载: {download_allowed}",
+        f"- 模块复现门槛: {semantic_gate.get('category')} / {semantic_gate.get('reason')}",
         f"- 自检对比图: `{self_check_png}`",
         f"- Scene: `{scene_path}`",
         "",
@@ -563,7 +722,8 @@ def write_quality_report(
         md_lines.append(
             f"- round {attempt.get('round')}: mode={attempt.get('mode')}, "
             f"score={attempt.get('self_check_score')}, pass={attempt.get('passed')}, "
-            f"no_embed={attempt.get('no_image_embedding')}"
+            f"no_embed={attempt.get('no_image_embedding')}, "
+            f"semantic={attempt.get('semantic_gate_passed')}:{attempt.get('semantic_gate_category')}"
         )
     quality_md = quality_dir / "quality_report.md"
     quality_md.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
@@ -600,19 +760,23 @@ def run_attempt(
     if missing:
         raise RuntimeError("Visio 渲染完成但缺少输出文件: " + ", ".join(missing))
 
-    scene_info = scene_quality_metrics(read_json(scene_path), staged_source)
+    scene = read_json(scene_path)
+    scene_info = scene_quality_metrics(scene, staged_source)
     vsdx_info = inspect_vsdx_for_images(vsdx_path)
     no_image_embedding = not scene_info["blocked_embedding"] and not bool(vsdx_info["has_embedded_images"])
+    semantic_gate = semantic_reconstruction_gate(scene, mode=mode, no_image_embedding=no_image_embedding)
 
     log("运行截图自检...")
     self_check_json, self_check_png, self_report = run_self_check(staged_source, png_path, check_dir)
-    passed = bool(no_image_embedding and self_report.get("passed"))
+    passed = bool(no_image_embedding and self_report.get("passed") and semantic_gate.get("passed"))
     failed_rule_text = "；".join(format_failed_rule(rule) for rule in self_check_failed_rules(self_report)[:4])
     log(
         f"自检结果: {'通过' if passed else '失败'}; "
         f"score={float(self_report.get('score', 0.0)):.3f}; "
-        f"no_image_embedding={no_image_embedding}"
+        f"no_image_embedding={no_image_embedding}; "
+        f"semantic_gate={semantic_gate.get('category')}"
         + (f"; 未达标项={failed_rule_text}" if failed_rule_text else "")
+        + (f"; 模块门槛={semantic_gate.get('reason')}" if not bool(semantic_gate.get("passed")) else "")
     )
 
     return {
@@ -630,10 +794,30 @@ def run_attempt(
         "self_check_score": float(self_report.get("score", 0.0) or 0.0),
         "self_check_passed": bool(self_report.get("passed")),
         "no_image_embedding": no_image_embedding,
+        "semantic_gate": semantic_gate,
+        "semantic_gate_passed": bool(semantic_gate.get("passed")),
+        "semantic_gate_category": semantic_gate.get("category"),
+        "semantic_gate_reason": semantic_gate.get("reason"),
         "scene_info": scene_info,
         "vsdx_info": vsdx_info,
         "passed": passed,
     }
+
+
+def attempt_score(attempt: dict[str, object]) -> float:
+    return float(attempt.get("self_check_score", 0.0) or 0.0)
+
+
+def select_attempt_for_delivery(attempts: list[dict[str, object]]) -> tuple[dict[str, object] | None, str]:
+    for attempt in attempts:
+        if attempt.get("passed"):
+            return attempt, "passed"
+    semantic_attempts = [attempt for attempt in attempts if attempt.get("semantic_gate_passed")]
+    if semantic_attempts:
+        return max(semantic_attempts, key=attempt_score), "best_semantic_failed_self_check"
+    if attempts:
+        return max(attempts, key=attempt_score), "best_diagnostic_no_semantic"
+    return None, "none"
 
 
 def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
@@ -648,8 +832,6 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
 
     modes = ["standard", "vector_trace", "vector_trace_dense"][:MAX_AUTO_ATTEMPTS]
     attempts: list[dict[str, object]] = []
-    selected: dict[str, object] | None = None
-    best: dict[str, object] | None = None
 
     for index, mode in enumerate(modes, 1):
         attempt = run_attempt(
@@ -661,20 +843,22 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
             log=log,
         )
         attempts.append(attempt)
-        if best is None or float(attempt["self_check_score"]) > float(best["self_check_score"]):
-            best = attempt
         if attempt["passed"]:
-            selected = attempt
             log(f"第 {index} 轮已通过自检，停止重跑。")
             break
         if index < len(modes):
             log("截图差距过大，自动切换策略重跑一轮...")
 
+    selected, selection_reason = select_attempt_for_delivery(attempts)
     if selected is None:
-        selected = best
-        if selected is None:
-            raise RuntimeError("没有生成任何可评估的输出。")
-        log("所有自动轮次均未通过截图自检；保留最佳轮次但禁止下载。")
+        raise RuntimeError("没有生成任何可评估的输出。")
+    if not selected.get("passed"):
+        if selection_reason == "best_semantic_failed_self_check":
+            log("所有自动轮次均未同时通过截图和模块门槛；保留最佳模块复现轮次但禁止下载。")
+        elif selection_reason == "best_diagnostic_no_semantic":
+            log("没有生成合格模块复现轮次；仅保留诊断轮次并禁止下载。")
+        else:
+            log("所有自动轮次均未通过；保留最佳轮次但禁止下载。")
 
     attempt_dir = Path(selected["attempt_dir"])
     scene_path = Path(selected["scene"])
@@ -708,6 +892,7 @@ def run_fig4visio_job(source_path: Path, *, log) -> OutputSet:
         attempts=attempts,
         download_allowed=download_allowed,
         no_image_embedding=no_image_embedding,
+        semantic_gate=selected["semantic_gate"],
     )
     log(f"{label}: {summary}")
 

@@ -16,6 +16,8 @@ from PIL import Image
 
 
 TARGET_WIDTH_IN = 13.333
+_RAPIDOCR_ENGINE: Any | None = None
+_RAPIDOCR_IMPORT_FAILED = False
 
 
 @dataclass
@@ -161,13 +163,19 @@ def normalize_ocr_result(raw: Any) -> list[dict[str, Any]]:
 
 
 def run_ocr(image_path: Path) -> list[dict[str, Any]]:
+    global _RAPIDOCR_ENGINE, _RAPIDOCR_IMPORT_FAILED
+    if _RAPIDOCR_IMPORT_FAILED:
+        return []
     try:
-        from rapidocr_onnxruntime import RapidOCR
+        if _RAPIDOCR_ENGINE is None:
+            from rapidocr_onnxruntime import RapidOCR
+
+            _RAPIDOCR_ENGINE = RapidOCR()
     except Exception:
+        _RAPIDOCR_IMPORT_FAILED = True
         return []
 
-    engine = RapidOCR()
-    result, _ = engine(str(image_path))
+    result, _ = _RAPIDOCR_ENGINE(str(image_path))
     return normalize_ocr_result(result)
 
 

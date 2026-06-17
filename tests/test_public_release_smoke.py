@@ -161,6 +161,113 @@ def test_vector_trace_mode_keeps_icon_vectors_no_raster(tmp_path: Path, monkeypa
     assert all(node.get("type") != "image_tile" for node in scene["nodes"])
 
 
+def test_gui_semantic_gate_blocks_vector_trace_even_with_good_score() -> None:
+    scene = {
+        "version": "0.1",
+        "metadata": {
+            "created_by": "fig4visio.image_auto_scene.vector_trace_dense",
+            "fidelity": "auto_editable_vector_trace_draft",
+            "reconstruction_mode": "vector_trace_dense",
+        },
+        "page": {"width": 900, "height": 420, "units": "px"},
+        "nodes": [
+            {"id": "page_background", "type": "page_background", "x": 0, "y": 0, "w": 900, "h": 420},
+            {"id": "label", "type": "text_block", "x": 40, "y": 40, "w": 120, "h": 30, "text": "Input"},
+        ],
+        "edges": [{"id": "trace_001", "type": "line_segment", "points": [[10, 10], [200, 10]]}],
+        "assets": [],
+    }
+
+    gate = gui_app.semantic_reconstruction_gate(scene, mode="vector_trace_dense", no_image_embedding=True)
+
+    assert gate["passed"] is False
+    assert gate["category"] == "diagnostic_vector_trace"
+    assert "线稿追踪" in gate["reason"]
+
+
+def test_gui_semantic_gate_accepts_category_template() -> None:
+    scene = {
+        "version": "0.1",
+        "metadata": {
+            "created_by": "fig4visio.image_auto_scene.remote_sensing_rsei_workflow",
+            "fidelity": "semantic_editable_rebuild",
+            "architecture_template": "remote_sensing_rsei_workflow",
+            "reconstruction_mode": "standard",
+        },
+        "page": {"width": 900, "height": 420, "units": "px"},
+        "nodes": [
+            {"id": "page_background", "type": "page_background", "x": 0, "y": 0, "w": 900, "h": 420},
+            {"id": "input", "type": "process_box", "x": 40, "y": 40, "w": 120, "h": 60, "text": "Input"},
+            {"id": "process", "type": "process_box", "x": 260, "y": 40, "w": 120, "h": 60, "text": "Process"},
+        ],
+        "edges": [{"id": "flow", "type": "arrow_connector", "from": "input:right", "to": "process:left"}],
+        "assets": [],
+    }
+
+    gate = gui_app.semantic_reconstruction_gate(scene, mode="standard", no_image_embedding=True)
+
+    assert gate["passed"] is True
+    assert gate["category"] == "semantic_template"
+
+
+def test_gui_semantic_gate_rejects_dense_generic_clean_flow() -> None:
+    scene = {
+        "version": "0.1",
+        "metadata": {
+            "created_by": "fig4visio.image_auto_scene.clean_flow",
+            "fidelity": "generic_clean_flow_editable_rebuild",
+            "reconstruction_mode": "standard",
+        },
+        "page": {"width": 1200, "height": 800, "units": "px"},
+        "nodes": [
+            {"id": "page_background", "type": "page_background", "x": 0, "y": 0, "w": 1200, "h": 800},
+        ]
+        + [
+            {"id": f"box_{index}", "type": "process_box", "x": 20 + index * 10, "y": 20, "w": 60, "h": 30, "text": f"N{index}"}
+            for index in range(100)
+        ],
+        "edges": [
+            {
+                "id": f"edge_{index}",
+                "type": "arrow_connector",
+                "from": f"box_{index % 100}:right",
+                "to": f"box_{(index + 1) % 100}:left",
+            }
+            for index in range(250)
+        ],
+        "assets": [],
+    }
+
+    gate = gui_app.semantic_reconstruction_gate(scene, mode="standard", no_image_embedding=True)
+
+    assert gate["passed"] is False
+    assert gate["category"] == "weak_generic_flow"
+
+
+def test_gui_selects_semantic_attempt_before_diagnostic_trace() -> None:
+    attempts = [
+        {
+            "round": 1,
+            "self_check_score": 0.31,
+            "passed": False,
+            "semantic_gate_passed": True,
+            "mode": "standard",
+        },
+        {
+            "round": 2,
+            "self_check_score": 0.66,
+            "passed": False,
+            "semantic_gate_passed": False,
+            "mode": "vector_trace",
+        },
+    ]
+
+    selected, reason = gui_app.select_attempt_for_delivery(attempts)
+
+    assert selected is attempts[0]
+    assert reason == "best_semantic_failed_self_check"
+
+
 def test_swin_transformer_architecture_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "swin_arch.png"
     Image.new("RGB", (1148, 355), "white").save(source)

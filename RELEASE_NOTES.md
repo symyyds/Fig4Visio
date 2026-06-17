@@ -1,3 +1,24 @@
+# Fig4Visio v0.3.12 Release Notes
+
+This update changes the GUI workflow from a screenshot-only gate to a semantic delivery gate. A result is now downloadable only when it has no raster/image embedding, passes screenshot self-check, and passes a semantic module reconstruction gate. Dense vector tracing and generic auto drafts are explicitly treated as diagnostic or blocked outputs, not successful Visio reconstruction.
+
+## Core Updates
+
+- Added a GUI semantic reconstruction gate that distinguishes `semantic_template`, sparse `generic_module_flow`, `generic_auto_draft`, `weak_generic_flow`, and `diagnostic_vector_trace`.
+- `vector_trace` and `vector_trace_dense` can still be generated as diagnostic retry rounds, but they can no longer enable download even if their screenshot score looks acceptable.
+- When no attempt fully passes, the GUI now prefers the best semantic/module attempt over a higher-scoring diagnostic trace, so users are not shown a misleading line-art result as the best deliverable.
+- Cached the RapidOCR engine inside `image_auto_scene.py` so batch and GUI runs do not reload the OCR model for every image.
+- Tightened generic `clean_flow` delivery rules: only sparse OCR/shape anchored module flows may pass the semantic gate; dense weak generic flows are blocked.
+- Fixed batch workflow VSDX media counting so `/media/` and `ForeignData` checks are reported with the current `inspect_vsdx_for_images()` keys.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 26 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- 29 historical GUI source images were re-audited at scene level: OCR recovered on 28/29 images; 11 images matched semantic templates and 18 were correctly blocked as generic/weak drafts instead of being falsely marked successful.
+- GUI-equivalent Visio batch render on the 11 semantic-template images: 11/11 passed on first standard attempt, `download_allowed=11`, `scene_assets_total=0`, `scene_image_tiles_total=0`, `vsdx_media_count_total=0`, minimum self-check score `0.4769`.
+- A blocked historical sample was run through the full GUI workflow: all 3 attempts remained `passed=False`; final status was `semantic_gate_failed`, with `vector_trace` rounds marked `diagnostic_vector_trace`.
+
 # Fig4Visio v0.3.11 Release Notes
 
 This update adds a generalized semantic reconstruction path for meteorological drought and global river-basin workflow figures. The selector uses combined OCR signals such as `Datasets input`, `Drought index SPEI-12`, `Drought-wet change`, `34 major global river basins`, `3-D Drought Clustering`, `Drought event characteristics`, `Influencing factors of drought`, `Maximum covariance analysis`, `SST`, `ENSO`, and `MCA2`; it is not tied to a filename or image hash.
