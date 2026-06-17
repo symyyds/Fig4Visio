@@ -1,3 +1,21 @@
+# Fig4Visio v0.3.15 Release Notes
+
+This update adds a dedicated OCR-triggered reconstruction path for wide DRT-FKV multi-phase framework figures. The selector now looks for the full phase-band / panel / backend / output signal set, instead of falling back to the older narrow SPECK-DRT template.
+
+## Core Updates
+
+- Added `drt_fkv_multiphase_framework` detection before the legacy DRT/SPECK fallback.
+- Rebuilds the four main panels, three phase ribbons, dataset stack, CPA/profiling/diagnostic modules, key-recovery evaluation, transferability cards, leakage diagnosis row, FKV backend, and DRT output cards as editable Visio objects.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage requiring the new category template, editable containers/modules/vector stripes/grids/icons, and no raster embedding.
+
+## Verification
+
+- `python -m pytest tests\\test_public_release_smoke.py -q`: 32 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- User-provided DRT-FKV multi-phase image: semantic template selected on the first standard pass, screenshot self-check score `0.6937`, and no image embedding was present (`assets=0`, `image_tiles=0`).
+
 # Fig4Visio v0.3.14 Release Notes
 
 This update adds a generalized semantic reconstruction path for Industry 4.0 sustainability framework figures. The selector uses combined OCR signals such as `Industry 4.0`, `Technologies`, `Components`, `Principles`, `Industry 4.0 Sustainability Functions`, `Sustainable Manufacturing`, `Social development`, `Sustainable economic growth`, `Renewables`, and `Green manufacturing`; it is not tied to a filename or image hash.

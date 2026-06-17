@@ -1512,6 +1512,84 @@ def is_industry_4_0_sustainability_framework_figure(
     )
 
 
+def is_drt_fkv_multiphase_framework_figure(
+    ocr_items: list[dict[str, Any]],
+    width: int,
+    height: int,
+) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    folded = corpus.replace("&", "and").replace("\u03c8", "psi")
+    compact = re.sub(r"[^a-z0-9]+", "", folded)
+    aspect = width / max(1, height)
+
+    has_phase_bands = (
+        ("phaset1" in compact or "phasetminus1" in compact or "acquisitionandpreprocessing" in compact)
+        and "attackandrecovery" in compact
+        and "evaluationandverification" in compact
+    )
+    has_data_panel = "dataacquisitionandtracepreparation" in compact or (
+        "dataacquisition" in compact and "tracepreparation" in compact
+    )
+    has_attack_panel = "attackanddiagnosismodules" in compact or (
+        "cpabasedattacks" in compact and "diagnosticanalyses" in compact
+    )
+    has_eval_panel = "evaluationandverification" in compact and (
+        "keyrecoveryevaluation" in compact or "transferabilityevaluation" in compact
+    )
+    has_recovery_backend = "fullkeyrecovery" in compact and ("drtfkvbackend" in compact or "backend" in compact)
+    has_drt_output = "drtframeworkoutput" in compact or ("drt" in compact and "frameworkoutput" in compact)
+    has_speck_fkv = "speck" in compact and ("fkv" in compact or "fullkeyverification" in compact)
+    has_trace_pool = "tracepool" in compact or ("trace" in compact and "pool" in compact)
+    has_attack_terms = sum(
+        token in compact
+        for token in (
+            "signedcpa",
+            "multipoi",
+            "secondordercpa",
+            "profilingdl",
+            "statisticaltests",
+            "leakagemetrics",
+            "poiconsistency",
+            "keyhypotheses",
+        )
+    ) >= 4
+    has_eval_terms = sum(
+        token in compact
+        for token in (
+            "rankevolution",
+            "attacktracesbudget",
+            "recoverability",
+            "transferability",
+            "detectability",
+            "verifiedkeys",
+            "recoveryresult",
+        )
+    ) >= 4
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_phase_bands,
+            has_data_panel,
+            has_attack_panel,
+            has_eval_panel,
+            has_recovery_backend,
+            has_drt_output,
+            has_speck_fkv,
+            has_trace_pool,
+            has_attack_terms,
+            has_eval_terms,
+        )
+    )
+    return (
+        1.65 <= aspect <= 2.55
+        and has_phase_bands
+        and has_recovery_backend
+        and has_drt_output
+        and has_speck_fkv
+        and signal_count >= 8
+    )
+
+
 def is_mask_res_block_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
     corpus = ocr_corpus(ocr_items).lower()
     compact = re.sub(r"[^a-z0-9]+", "", corpus)
@@ -4549,6 +4627,602 @@ def detect_residual_lines(image: np.ndarray, ocr_items: list[dict[str, Any]], mo
     return edges
 
 
+def build_drt_fkv_multiphase_framework_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 1946.0
+    base_h = 958.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def attach(item: dict[str, Any], x: float, y: float, w: float, h: float, container_id: str | None = None) -> dict[str, Any]:
+        item["source_bbox_px"] = bbox(x, y, w, h)
+        if container_id:
+            item["container_id"] = container_id
+        item.setdefault("allow_overlap", True)
+        return item
+
+    def node(
+        node_id: str,
+        node_type: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str = "",
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#64748B",
+        z: int = 20,
+        font_size: float = 10.5,
+        text_color: str | None = None,
+        dash: str = "solid",
+        rounding: float = 0.06,
+        container_id: str | None = None,
+        weight: str = "regular",
+    ) -> dict[str, Any]:
+        item = px_node(
+            node_id,
+            node_type,
+            sx(x),
+            sy(y),
+            sx(w),
+            sy(h),
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            text_color=text_color or "#111111",
+            dash=dash,
+            rounding=rounding,
+        )
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Georgia", "Cambria", "Arial"],
+                "font_role": "paper_serif",
+                "font_weight": weight,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.6,
+                "text_margin_in": 0.025,
+                "line_weight_pt": 1.05,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def label(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        font_size: float = 12.0,
+        weight: str = "regular",
+        container_id: str | None = None,
+        z: int = 90,
+    ) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Georgia", "Cambria", "Arial"],
+                "font_role": "paper_serif",
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.8,
+                "text_margin_in": 0.0,
+            }
+        )
+        return attach(item, x, y, w, h, container_id)
+
+    def frame(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        fill: str,
+        line: str = "#9AA9B6",
+        z: int = 4,
+        dash: str = "dash",
+        rounding: float = 0.08,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "group_container",
+            x,
+            y,
+            w,
+            h,
+            "",
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=1,
+            dash=dash,
+            rounding=rounding,
+        )
+        item["style"].update({"line_weight_pt": 1.15, "fill_transparency": 0.05})
+        return item
+
+    def panel(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        title_text: str,
+        *,
+        fill: str = "#F8FBFD",
+        line: str = "#B5C1CC",
+        container_id: str | None = None,
+        header_fill: str = "#DCECF5",
+        z: int = 24,
+    ) -> list[dict[str, Any]]:
+        return [
+            node(node_id, "group_container", x, y, w, h, "", fill=fill, line=line, z=z, font_size=1, rounding=0.05, container_id=container_id),
+            node(
+                f"{node_id}_header",
+                "rounded_process",
+                x,
+                y,
+                w,
+                38,
+                title_text,
+                fill=header_fill,
+                line=line,
+                z=z + 1,
+                font_size=11.0,
+                weight="bold",
+                rounding=0.035,
+                container_id=node_id,
+            ),
+        ]
+
+    def rounded(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#B7BDC4",
+        font_size: float = 10.0,
+        container_id: str | None = None,
+        z: int = 32,
+        weight: str = "regular",
+    ) -> dict[str, Any]:
+        return node(
+            node_id,
+            "rounded_process",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.055,
+            container_id=container_id,
+            weight=weight,
+        )
+
+    def process(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        text: str,
+        *,
+        fill: str = "#FFFFFF",
+        line: str = "#B7BDC4",
+        font_size: float = 9.5,
+        container_id: str | None = None,
+        z: int = 35,
+    ) -> dict[str, Any]:
+        return node(
+            node_id,
+            "process_box",
+            x,
+            y,
+            w,
+            h,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=font_size,
+            rounding=0.02,
+            container_id=container_id,
+        )
+
+    def grid(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        rows: int,
+        cols: int,
+        colors: list[str],
+        container_id: str | None = None,
+        z: int = 42,
+    ) -> dict[str, Any]:
+        colored = []
+        for row in range(rows):
+            for col in range(cols):
+                colored.append([row, col, colors[(row * 3 + col * 5 + row * col) % len(colors)]])
+        item = {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "rows": rows,
+            "cols": cols,
+            "colored_cells": colored,
+            "style": {
+                "cell_fill": colors[0],
+                "grid_line": "#FFFFFF",
+                "grid_line_weight_pt": 0.35,
+                "line": "#94A3B8",
+                "line_weight_pt": 0.55,
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def vector(
+        node_id: str,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        *,
+        colors: list[str],
+        orientation: str = "horizontal",
+        container_id: str | None = None,
+        z: int = 43,
+    ) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "feature_vector_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "orientation": orientation,
+            "count": len(colors),
+            "cell_fills": colors,
+            "outline": True,
+            "style": {
+                "cell_fill": colors[0],
+                "cell_line": "#FFFFFF",
+                "cell_line_weight_pt": 0.3,
+                "line": "#94A3B8",
+                "line_weight_pt": 0.55,
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def circle(
+        node_id: str,
+        x: float,
+        y: float,
+        size: float,
+        text: str = "",
+        *,
+        fill: str,
+        line: str,
+        color: str = "#FFFFFF",
+        container_id: str | None = None,
+        z: int = 58,
+    ) -> dict[str, Any]:
+        item = node(
+            node_id,
+            "ellipse_node",
+            x,
+            y,
+            size,
+            size,
+            text,
+            fill=fill,
+            line=line,
+            z=z,
+            font_size=15,
+            text_color=color,
+            rounding=0.0,
+            container_id=container_id,
+            weight="bold",
+        )
+        item["style"].update({"font_family": "Arial", "line_weight_pt": 1.2})
+        return item
+
+    def line(
+        edge_id: str,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        *,
+        arrow: bool = True,
+        route: str = "straight",
+        points: list[list[float]] | None = None,
+        z: int = 70,
+        color: str = "#111111",
+        weight: float = 1.1,
+    ) -> dict[str, Any]:
+        item = edge_px(
+            edge_id,
+            sx(x1),
+            sy(y1),
+            sx(x2),
+            sy(y2),
+            arrow=arrow,
+            route=route,
+            points=[[sx(px), sy(py)] for px, py in points] if points else None,
+            z=z,
+            allow_cross_container=True,
+        )
+        item["style"].update({"line": color, "line_weight_pt": weight, "arrow_size": "small"})
+        if route in {"horizontal", "vertical"} and arrow:
+            item["type"] = "lane_arrow"
+        return item
+
+    nodes: list[dict[str, Any]] = [
+        px_node("page_background", "page_background", 0, 0, width, height, "", fill="#FFFFFF", line="none", z=0)
+    ]
+    edges: list[dict[str, Any]] = []
+
+    # Phase ribbons.
+    nodes.extend(
+        [
+            rounded("phase_acq", 24, 8, 568, 50, "Phase t-1: Acquisition & Preprocessing", fill="#B8D8EF", line="#78A8C7", font_size=17, weight="bold", z=8),
+            rounded("phase_attack", 601, 8, 693, 50, "Phase t: Attack & Recovery", fill="#5D9BD4", line="#3D80BA", font_size=17, weight="bold", z=8),
+            rounded("phase_eval", 1309, 8, 622, 50, "Phase t+1: Evaluation & Verification", fill="#CBE7B8", line="#9FC985", font_size=17, weight="bold", z=8),
+        ]
+    )
+    nodes[-2]["style"]["text_color"] = "#FFFFFF"
+
+    # Large panels.
+    nodes.extend(
+        [
+            frame("panel_acq", 25, 74, 540, 578, fill="#F7FBFD", line="#B8C4CE", dash="dash", z=4),
+            frame("panel_attack", 588, 74, 703, 578, fill="#F7FBFD", line="#B8C4CE", dash="dash", z=4),
+            frame("panel_eval", 1310, 74, 620, 578, fill="#F8FCF4", line="#B8C8AA", dash="dash", z=4),
+            frame("panel_backend", 25, 678, 1310, 266, fill="#FFFDF0", line="#E0CF86", dash="solid", z=4),
+            frame("panel_output", 1350, 678, 580, 266, fill="#FFF5FD", line="#D3B8D9", dash="solid", z=4),
+            label("title_acq", 39, 88, 475, 28, "(a) Data Acquisition & Trace Preparation (Psi_A)", font_size=15.5, weight="bold", container_id="panel_acq"),
+            label("title_attack", 606, 88, 420, 28, "(b) Attack & Diagnosis Modules (Psi_D)", font_size=15.5, weight="bold", container_id="panel_attack"),
+            label("title_eval", 1333, 88, 355, 28, "(c) Evaluation & Verification (Psi_V)", font_size=15.5, weight="bold", container_id="panel_eval"),
+            label("title_backend", 44, 692, 560, 28, "(d) Full-Key Recovery & DRT-FKV Backend (Psi_R)", font_size=16, weight="bold", container_id="panel_backend"),
+            label("title_output", 1458, 690, 330, 28, "DRT Framework Output", font_size=14.8, weight="bold", container_id="panel_output"),
+        ]
+    )
+
+    # Acquisition panel.
+    acq_steps = [
+        ("target_impl", 39, 138, 228, 72, "Target\nImplementation"),
+        ("plain_key", 39, 234, 228, 70, "Plaintext / Key\nConfiguration"),
+        ("power_trace", 39, 326, 228, 70, "Power Trace\nAcquisition"),
+        ("preprocess", 39, 423, 228, 109, "Preprocessing\n- Alignment\n- Detrending\n- Normalization"),
+    ]
+    for idx, (nid, x, y, w, h, text) in enumerate(acq_steps):
+        nodes.append(rounded(nid, x, y, w, h, text, fill="#F8FAFC", line="#7B8792", font_size=10.8, container_id="panel_acq"))
+        if idx:
+            prev = acq_steps[idx - 1]
+            edges.append(line(f"acq_step_{idx}", prev[1] + prev[3] / 2, prev[2] + prev[4], x + w / 2, y, route="vertical"))
+    edges.append(line("acq_to_dataset", 267, 267, 308, 267, route="horizontal"))
+
+    nodes.extend(panel("datasets_panel", 309, 137, 242, 376, "Datasets", fill="#F9FBFC", header_fill="#D9EDF6", container_id="panel_acq"))
+    dataset_rows = [
+        ("profiling_set", 323, 199, 216, 88, "Profiling Set (P)", "#8DCB55", "#DDEFCB"),
+        ("attack_set", 323, 308, 216, 87, "Attack Set (A)", "#168FCB", "#D8EEF9"),
+        ("verification_set", 323, 416, 216, 96, "Verification Set (V)\n(Plaintext/Ciphertext Pairs\nfor FKV)", "#111111", "#F8F8FA"),
+    ]
+    for nid, x, y, w, h, text, color, fill in dataset_rows:
+        nodes.append(rounded(nid, x, y, w, h, text, fill=fill, line="#C7C7C7", font_size=9.6 if nid == "verification_set" else 10.4, container_id="datasets_panel"))
+        if nid != "verification_set":
+            for dot_idx in range(11):
+                nodes.append(circle(f"{nid}_dot_{dot_idx:02d}", x + 27 + dot_idx * 16, y + 48 + (dot_idx % 3 - 1) * 5, 8, "", fill=color, line=color, z=47, container_id=nid))
+    nodes.append(rounded("acq_partition_note", 38, 578, 514, 38, "Same device  -  Same acquisition chain  -  Same partition", fill="#DDECF8", line="#9FB5C8", font_size=10.5, container_id="panel_acq"))
+
+    # Attack and diagnosis panel.
+    nodes.extend(panel("cpa_attacks", 601, 136, 201, 395, "CPA-Based Attacks", fill="#EFF7FB", header_fill="#D1E7F5", container_id="panel_attack"))
+    cpa_modules = [
+        ("signed_cpa", 615, 190, 172, 88, "Signed-CPA\n(Polarity Control)", ["#242424", "#DBDBDB", "#606060", "#FFFFFF", "#343434", "#B6B6B6"]),
+        ("multi_poi", 615, 294, 172, 88, "Multi-POI CPA\n(Aggregation)", ["#FA8C00", "#FFC04D", "#F26B00", "#FFF4CD", "#E88B00", "#FFCC66"]),
+        ("second_order", 615, 398, 172, 101, "Second-Order CPA\n(Masked Test)", ["#5D963C", "#A8CE8A", "#FFFFFF", "#6CAB4C", "#D7EBC8", "#3F7B2D"]),
+    ]
+    for nid, x, y, w, h, text, colors in cpa_modules:
+        nodes.append(rounded(nid, x, y, w, h, text, fill="#F8FAFC", line="#B7BDC4", font_size=10.3, container_id="cpa_attacks"))
+        nodes.append(vector(f"{nid}_stripe", x + 25, y + h - 30, w - 50, 22, colors=colors, container_id=nid))
+
+    nodes.extend(panel("profiling_attacks", 815, 136, 165, 395, "Profiling DL Attacks", fill="#EFF7FB", header_fill="#D1E7F5", container_id="panel_attack"))
+    nodes.append(rounded("mlp_attack", 826, 190, 139, 162, "MLP\n(Feed-forward)", fill="#F8FAFC", line="#B7BDC4", font_size=10.2, container_id="profiling_attacks"))
+    for idx, (cx, cy, color) in enumerate([(859, 285, "#ED8B6B"), (891, 276, "#F2C77B"), (924, 286, "#A7D18D"), (858, 319, "#ED8B6B"), (891, 310, "#C6DFA9"), (924, 319, "#A7D18D")]):
+        nodes.append(circle(f"mlp_node_{idx}", cx, cy, 14, "", fill=color, line="#6B7280", z=48, container_id="mlp_attack"))
+    for idx, (x1, y1, x2, y2) in enumerate([(866, 292, 898, 283), (866, 326, 898, 317), (898, 283, 931, 293), (898, 317, 931, 326), (866, 292, 898, 317), (866, 326, 898, 283)]):
+        edges.append(line(f"mlp_link_{idx}", x1, y1, x2, y2, arrow=False, color="#8C8C8C", weight=0.8, z=46))
+    nodes.append(rounded("cnn_attack", 826, 368, 139, 162, "CNN\n(1D Convolution)", fill="#F8FAFC", line="#B7BDC4", font_size=10.2, container_id="profiling_attacks"))
+    for idx in range(5):
+        nodes.append(process(f"cnn_slab_{idx}", 850 + idx * 14, 432 + idx * 7, 34, 60 - idx * 6, "", fill=["#D7E6F2", "#B9D4EA", "#8FBADF", "#DCEAF7", "#EAF4FA"][idx], line="#6B7280", z=45 + idx, container_id="cnn_attack"))
+
+    nodes.extend(panel("diagnostic_analyses", 996, 136, 176, 395, "Diagnostic Analyses", fill="#EFF7FB", header_fill="#D1E7F5", container_id="panel_attack"))
+    diag_modules = [
+        ("stat_tests", 1005, 190, 158, 70, "Statistical Tests\n(SNR / t-test / MMD)", ["#4C9FB7", "#9BD3C8", "#F5E95A", "#2787C2", "#90C58C"]),
+        ("leakage_metrics", 1005, 272, 158, 70, "Leakage Metrics\n(SNR / Welch-t / GE)", ["#222222", "#8F8F8F", "#D8D8D8", "#555555", "#B9B9B9"]),
+        ("poi_stability", 1005, 366, 158, 70, "POI Consistency\n& Ranking Stability", ["#F28B13", "#FFE16A", "#F6A41B", "#FFC64B", "#E67200"]),
+        ("ablation", 1005, 450, 158, 70, "Ablation Analyses\n(R0-R3 / POI)", ["#2D913E", "#90C66D", "#DCEFCF", "#44A348", "#79B84A"]),
+    ]
+    for nid, x, y, w, h, text, colors in diag_modules:
+        nodes.append(rounded(nid, x, y, w, h, text, fill="#F8FAFC", line="#B7BDC4", font_size=9.1, container_id="diagnostic_analyses"))
+        nodes.append(vector(f"{nid}_stripe", x + 21, y + h - 28, w - 42, 20, colors=colors, container_id=nid))
+
+    nodes.append(rounded("trace_pool", 1193, 245, 78, 165, "Trace Pool", fill="#F8FAFC", line="#111827", font_size=11, container_id="panel_attack", z=36))
+    nodes.append(node("trace_pool_top", "ellipse_node", 1194, 245, 76, 32, "", fill="#F0EDF4", line="#111827", z=47, font_size=1, container_id="trace_pool"))
+    nodes.append(vector("trace_pool_blue", 1207, 286, 45, 34, colors=["#D8EEF9", "#2E8AC4", "#71B7DA", "#D8EEF9", "#1E6CA8"], orientation="vertical", container_id="trace_pool"))
+    nodes.append(vector("trace_pool_green", 1207, 338, 45, 34, colors=["#CFE8C4", "#5FAA4F", "#8FC77E", "#DDEFD5", "#3F913F"], orientation="vertical", container_id="trace_pool"))
+    nodes.append(label("trace_pool_dots", 1218, 381, 32, 18, "...", font_size=13, weight="bold", container_id="trace_pool"))
+    nodes.append(rounded("key_hypotheses", 604, 555, 575, 85, "Key Hypotheses & Ranking", fill="#E9F1F7", line="#A9B9C7", font_size=12, weight="bold", container_id="panel_attack"))
+    for idx, (txt, x) in enumerate([("K0\n(best)", 663), ("K1", 772), ("K2", 866), ("...", 964), ("K255\n(worst)", 1038)]):
+        nodes.append(rounded(f"key_hyp_{idx}", x, 583, 96 if idx in {0, 4} else 82, 47, txt, fill="#FFFFFF", line="#B7BDC4", font_size=10.5, container_id="key_hypotheses"))
+
+    # Main attack arrows.
+    edges.extend(
+        [
+            line("dataset_to_attack", 551, 325, 601, 325, route="horizontal"),
+            line("cpa_to_profiling", 802, 326, 815, 326, route="horizontal"),
+            line("profiling_to_diag", 980, 326, 996, 326, route="horizontal"),
+            line("diag_to_pool", 1172, 326, 1193, 326, route="horizontal"),
+            line("pool_to_eval", 1271, 326, 1310, 326, route="horizontal"),
+            line("profiling_to_hypotheses", 898, 530, 898, 555, route="vertical"),
+        ]
+    )
+
+    # Evaluation panel.
+    nodes.extend(panel("key_recovery_eval", 1330, 137, 269, 229, "Key Recovery Evaluation", fill="#F7FAF1", header_fill="#E8F1D8", container_id="panel_eval"))
+    nodes.append(rounded("rank_evolution", 1342, 190, 245, 70, "Rank Evolution\n(GE / Success Rate)", fill="#FFFFFF", line="#C7C7C7", font_size=10.0, container_id="key_recovery_eval"))
+    for idx, (x1, y1, x2, y2) in enumerate([(1516, 245, 1530, 222), (1530, 222, 1545, 235), (1545, 235, 1561, 217), (1561, 217, 1568, 207)]):
+        edges.append(line(f"rank_curve_{idx}", x1, y1, x2, y2, arrow=False, color="#111111", weight=1.0, z=50))
+    nodes.append(rounded("trace_budget", 1342, 279, 245, 70, "Attack Traces Budget\nfor Full-Key Recovery", fill="#FFFFFF", line="#C7C7C7", font_size=10.0, container_id="key_recovery_eval"))
+    for idx, hbar in enumerate([18, 28, 42]):
+        nodes.append(process(f"trace_budget_bar_{idx}", 1520 + idx * 22, 329 - hbar, 12, hbar, "", fill="#3D95CE", line="#1F5E85", z=48, container_id="trace_budget"))
+
+    nodes.extend(panel("transfer_eval", 1637, 137, 278, 229, "Transferability Evaluation", fill="#F7FAF1", header_fill="#E8F1D8", container_id="panel_eval"))
+    nodes.append(rounded("fixed_key", 1650, 196, 166, 64, "Fixed-Key\n(Within-Device)", fill="#FFFFFF", line="#C7C7C7", font_size=10.0, container_id="transfer_eval"))
+    nodes.append(grid("fixed_key_grid", 1832, 200, 63, 58, rows=5, cols=4, colors=["#DDF1FA", "#42A4D8", "#A8D6EA", "#1478AA"], container_id="transfer_eval"))
+    nodes.append(rounded("cross_key", 1650, 284, 166, 64, "Cross-Key\n(LOKO / Generalization)", fill="#FFFFFF", line="#C7C7C7", font_size=10.0, container_id="transfer_eval"))
+    nodes.append(grid("cross_key_grid", 1832, 288, 63, 58, rows=5, cols=4, colors=["#E7F4DC", "#2E8B43", "#F5E37A", "#106D35"], container_id="transfer_eval"))
+    edges.append(line("key_recovery_to_transfer", 1599, 254, 1637, 254, route="horizontal"))
+
+    nodes.extend(panel("leakage_diagnosis", 1326, 385, 590, 104, "Leakage Diagnosis", fill="#F7FAF1", header_fill="#E8F1D8", container_id="panel_eval"))
+    nodes.append(circle("leakage_magnifier", 1340, 397, 30, "", fill="#DDEDFB", line="#111827", color="#111827", container_id="leakage_diagnosis"))
+    edges.append(line("leakage_magnifier_handle", 1364, 421, 1380, 437, arrow=False, color="#111827", weight=3.0, z=58))
+    for idx, (txt, x, y, w) in enumerate([
+        ("Detectability", 1390, 420, 140),
+        ("Recoverability", 1543, 420, 166),
+        ("Transferability", 1720, 420, 170),
+        ("POI Consistency", 1354, 458, 176),
+        ("Statistical Evidence", 1543, 458, 166),
+        ("Ablation Insight", 1720, 458, 170),
+    ]):
+        nodes.append(rounded(f"leakage_item_{idx}", x, y, w, 31, txt, fill="#FFFFFF", line="#C7C7C7", font_size=9.5, container_id="leakage_diagnosis"))
+
+    nodes.extend(panel("full_key_verification", 1326, 507, 590, 133, "Full-Key Verification (FKV)", fill="#F7FAF1", header_fill="#D9EDC8", container_id="panel_eval"))
+    nodes.append(rounded("round_keys_eval", 1337, 541, 123, 74, "R0-R3\nRound Keys", fill="#FFFFFF", line="#C7C7C7", font_size=9.5, container_id="full_key_verification"))
+    nodes.append(vector("round_keys_eval_vec", 1352, 585, 87, 24, colors=["#1A6EA9", "#7BB6D8", "#FFFFFF", "#205B94", "#42A4D8"], container_id="round_keys_eval"))
+    nodes.append(rounded("inverse_key_eval", 1488, 541, 170, 74, "Inverse Key Schedule\n(64-bit Master Key)", fill="#FFFFFF", line="#C7C7C7", font_size=9.4, container_id="full_key_verification"))
+    nodes.append(vector("inverse_key_eval_vec", 1510, 585, 128, 24, colors=["#333333", "#AAAAAA", "#FFFFFF", "#555555", "#D2D2D2"], container_id="inverse_key_eval"))
+    nodes.append(rounded("encrypt_check_eval", 1680, 541, 215, 74, "Encrypt & Check\n(Verification Set V)", fill="#FFFFFF", line="#C7C7C7", font_size=9.4, container_id="full_key_verification"))
+    nodes.append(vector("encrypt_check_eval_vec", 1700, 585, 132, 24, colors=["#E9F4E5", "#4E9C45", "#1D6F2D", "#CFE6C8", "#2E8B43"], container_id="encrypt_check_eval"))
+    nodes.append(circle("fkv_success_check", 1855, 583, 34, "OK", fill="#4CAF60", line="#4CAF60", container_id="full_key_verification"))
+    nodes.append(label("verified_note", 1468, 620, 275, 20, "Only Verified Keys Count as Success", font_size=10.5, weight="bold", container_id="full_key_verification"))
+    edges.extend(
+        [
+            line("round_to_inverse", 1460, 578, 1488, 578, route="horizontal"),
+            line("inverse_to_encrypt", 1658, 578, 1680, 578, route="horizontal"),
+        ]
+    )
+
+    # Backend panel.
+    backend_steps = [
+        ("candidate_scores", 38, 733, 107, 126, "Candidate\nKey Scores", "#FFFFFF"),
+        ("byte_ranking", 175, 733, 104, 126, "Byte-wise\nRanking", "#FFFFFF"),
+        ("round_assembly", 309, 733, 106, 126, "R0-R3\nAssembly", "#FFFFFF"),
+        ("inverse_speck", 444, 733, 126, 126, "Inverse SPECK\nKey Schedule", "#FFFFFF"),
+        ("candidate_master", 600, 733, 122, 126, "Candidate\nMaster Keys", "#FFFFFF"),
+        ("forward_encrypt", 758, 733, 178, 126, "Forward Encryption\n(Plaintext/Ciphertext)", "#F6FCF3"),
+        ("full_verify_backend", 964, 733, 176, 126, "Full-Key Verification\n(Verified Master Keys)", "#F6FCF3"),
+        ("recovery_result", 1171, 733, 151, 126, "Recovery Result", "#FFF9F4"),
+    ]
+    for nid, x, y, w, h, text, fill in backend_steps:
+        nodes.append(rounded(nid, x, y, w, h, text, fill=fill, line="#BAB4A0", font_size=10.1, container_id="panel_backend"))
+    nodes.append(vector("inverse_speck_vec", 457, 815, 92, 24, colors=["#FFFFFF", "#E8E0D8", "#D6CDC2", "#FFFFFF"], container_id="inverse_speck"))
+    nodes.append(circle("forward_lock", 774, 801, 38, "LOCK", fill="#1F8B45", line="#1F8B45", container_id="forward_encrypt"))
+    nodes.append(circle("backend_verify_check", 979, 800, 42, "OK", fill="#4CAF60", line="#4CAF60", container_id="full_verify_backend"))
+    nodes.append(rounded("result_success", 1172, 773, 150, 43, "Success", fill="#F7FAEE", line="#E0D6BF", font_size=11, weight="bold", container_id="recovery_result"))
+    nodes.append(circle("result_success_check", 1281, 780, 26, "OK", fill="#4CAF60", line="#4CAF60", container_id="recovery_result"))
+    nodes.append(rounded("result_fail", 1172, 817, 150, 42, "Fail", fill="#FFF4F1", line="#E0D6BF", font_size=11, weight="bold", container_id="recovery_result"))
+    nodes.append(circle("result_fail_cross", 1281, 825, 26, "X", fill="#E13939", line="#E13939", container_id="recovery_result"))
+    nodes.append(rounded("backend_rule", 123, 893, 1113, 38, "Full-key success requires correct R0-R3  ->  correct inverse key schedule  ->  pass verification on held-out P/C pairs.", fill="#FFF7CF", line="#E5CB5E", font_size=11, weight="bold", container_id="panel_backend"))
+    for idx, (left, right) in enumerate(zip(backend_steps, backend_steps[1:])):
+        edges.append(line(f"backend_flow_{idx}", left[1] + left[3], left[2] + left[4] / 2, right[1], right[2] + right[4] / 2, route="horizontal"))
+
+    # Output panel.
+    for idx, (nid, y, title_line, body) in enumerate(
+        [
+            ("out_unprotected", 721, "Unprotected SPECK", "High detectability, high recoverability,\nstrong cross-key transferability."),
+            ("out_masked", 793, "Masked SPECK (two-share)", "Low first-order detectability, limited recoverability,\nweak cross-key transferability."),
+            ("out_conclusion", 865, "Conclusion", "Masking reduces global leakage, but fixed-key\nsame-device residual leakage remains exploitable."),
+        ]
+    ):
+        nodes.append(rounded(nid, 1361, y, 555, 70, f"{title_line}\n{body}", fill="#FFFDFE", line="#D8C3D8", font_size=10.5, container_id="panel_output"))
+        nodes[-1]["style"]["text_align"] = 0
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.drt_fkv_multiphase_framework",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "architecture_template": "drt_fkv_multiphase_framework",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "region_first",
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "visual_reference_layer": False,
+            "notes": [
+                "OCR category strategy for wide DRT-FKV multi-phase framework figures.",
+                "Phase ribbons, panel containers, attack modules, diagnostic mini-matrices, FKV checks, backend flow, and output conclusions are editable Visio objects.",
+                "No source image or local raster tile is embedded.",
+            ],
+            "region_plan": [
+                {"id": "panel_acq", "role": "data_acquisition_trace_preparation", "source_bbox_px": bbox(25, 74, 540, 578)},
+                {"id": "panel_attack", "role": "attack_diagnosis_modules", "source_bbox_px": bbox(588, 74, 703, 578)},
+                {"id": "panel_eval", "role": "evaluation_verification", "source_bbox_px": bbox(1310, 74, 620, 578)},
+                {"id": "panel_backend", "role": "full_key_recovery_backend", "source_bbox_px": bbox(25, 678, 1310, 266)},
+                {"id": "panel_output", "role": "drt_framework_output", "source_bbox_px": bbox(1350, 678, 580, 266)},
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_speck_drt_fkv_scene(image_path: Path, width: int, height: int, ocr_items: list[dict[str, Any]]) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = [
         px_node("page_background", "page_background", 0, 0, width, height, "", fill="#FFFFFF", line="none", z=0),
@@ -6511,6 +7185,11 @@ def build_scene(
         return scene
     if is_industry_4_0_sustainability_framework_figure(ocr_items, width, height):
         scene = build_industry_4_0_sustainability_framework_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
+    if is_drt_fkv_multiphase_framework_figure(ocr_items, width, height):
+        scene = build_drt_fkv_multiphase_framework_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
         scene.setdefault("metadata", {})["reconstruction_mode"] = mode
         return scene

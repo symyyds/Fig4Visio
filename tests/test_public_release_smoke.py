@@ -756,6 +756,87 @@ def test_industry_4_0_sustainability_framework_uses_editable_template(tmp_path: 
     assert len(scene["edges"]) >= 20
 
 
+def test_drt_fkv_multiphase_framework_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "drt_fkv_multiphase_framework.jpg"
+    Image.new("RGB", (1946, 958), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Phase t-1: Acquisition & Preprocessing",
+            "Phase t: Attack & Recovery",
+            "Phase t+1: Evaluation & Verification",
+            "(a) Data Acquisition & Trace Preparation",
+            "(b) Attack & Diagnosis Modules",
+            "(c) Evaluation & Verification",
+            "(d) Full-Key Recovery & DRT-FKV Backend",
+            "DRT Framework Output",
+            "Target Implementation",
+            "Datasets",
+            "Profiling Set (P)",
+            "Attack Set (A)",
+            "Verification Set (V)",
+            "CPA-Based Attacks",
+            "Signed-CPA",
+            "Multi-POI CPA",
+            "Second-Order CPA",
+            "Profiling DL Attacks",
+            "Diagnostic Analyses",
+            "Statistical Tests",
+            "Leakage Metrics",
+            "POI Consistency",
+            "Trace Pool",
+            "Key Hypotheses & Ranking",
+            "Key Recovery Evaluation",
+            "Transferability Evaluation",
+            "Leakage Diagnosis",
+            "Full-Key Verification (FKV)",
+            "R0-R3 Round Keys",
+            "Inverse SPECK Key Schedule",
+            "Encrypt & Check",
+            "Recovery Result",
+            "Unprotected SPECK",
+            "Masked SPECK",
+            "Conclusion",
+            "Full-Key Recovery",
+            "SPECK",
+            "FKV",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = [node.get("type") for node in scene["nodes"]]
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.drt_fkv_multiphase_framework"
+    assert scene["metadata"]["architecture_template"] == "drt_fkv_multiphase_framework"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types.count("group_container") >= 12
+    assert node_types.count("rounded_process") >= 45
+    assert node_types.count("feature_vector_stack") >= 12
+    assert node_types.count("grid_matrix") >= 2
+    assert node_types.count("ellipse_node") >= 30
+    for label in [
+        "Phase t-1: Acquisition & Preprocessing",
+        "Phase t: Attack & Recovery",
+        "Phase t+1: Evaluation & Verification",
+        "(a) Data Acquisition & Trace Preparation",
+        "(b) Attack & Diagnosis Modules",
+        "(c) Evaluation & Verification",
+        "(d) Full-Key Recovery & DRT-FKV Backend",
+        "DRT Framework Output",
+        "Trace Pool",
+        "Key Hypotheses & Ranking",
+        "Full-Key Verification (FKV)",
+        "Unprotected SPECK",
+        "Masked SPECK",
+    ]:
+        assert label in texts
+    assert len(scene["edges"]) >= 25
+
+
 def test_channel_attention_recalibration_uses_editable_shape_template(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "channel_attention.png"
     Image.new("RGB", (981, 469), "white").save(source)
