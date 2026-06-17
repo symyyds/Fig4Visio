@@ -1,3 +1,22 @@
+# Fig4Visio v0.3.9 Release Notes
+
+This update adds a generalized semantic reconstruction path for wide two-row deformable Transformer encoder/decoder paper diagrams. The selector uses combined OCR signals such as `Encoder`, `Decoder`, `Multi-Head Deformable`, `Self-Attention`, `Cross-Attention`, `BC-FFN`, `GN`, `GELU`, `Feature Grids`, `Restore`, `Flatten`, and `Location-guided queries`; it is not tied to a filename or image hash.
+
+## Core Updates
+
+- Added `deformable_transformer_encoder_decoder` detection and editable reconstruction.
+- Rebuilds dashed Encoder/Decoder regions, self/cross-attention blocks, Add & Norm, BC-FFN internals, restore stacks, feature grids, flatten blocks, location-guided query stacks, position/add operators, math labels, and connectors as Visio-editable objects.
+- Preserves source-like light gray module backgrounds for this figure family so screenshot self-check does not reject sparse white-background redraws.
+- Keeps `assets: []`, `visual_reference_layer: false`, and `raster_tile_policy: semantic_template_no_raster_tiles`; no full-image embedding or `image_tile` fallback is used.
+- Added regression coverage requiring semantic shape components and gray editable module containers for this category.
+
+## Verification
+
+- `python -m pytest tests\test_public_release_smoke.py -q`: 20 passed
+- `python -m compileall -q scripts tests gui_app.py sync_to_skill.py`: passed
+- `python gui_app.py --smoke`: passed
+- User-provided deformable Transformer image: GUI workflow passed on the first round, screenshot self-check score `0.597`, `download_allowed=True`, and no image embedding (`assets=0`, `image_tiles=0`).
+
 # Fig4Visio v0.3.8 Release Notes
 
 This update adds a generalized semantic reconstruction path for channel-attention / squeeze-excitation style diagrams with 3D tensor blocks, 1x1xC channel vectors, and scale/excitation formula labels. It is triggered by combined OCR signals such as `Original image`, `F_scale`, `F_ex`, `F_sq`/similar OCR variants, `1x1xC`, and X/U tensor labels, not by filename or image hash.

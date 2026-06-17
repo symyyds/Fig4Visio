@@ -413,6 +413,57 @@ def test_channel_attention_recalibration_uses_editable_shape_template(tmp_path: 
     assert len(scene["edges"]) >= 14
 
 
+def test_deformable_transformer_encoder_decoder_uses_editable_template(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "deformable_transformer.png"
+    Image.new("RGB", (981, 524), "white").save(source)
+    monkeypatch.setattr(
+        image_auto_scene,
+        "run_ocr",
+        lambda _path: fake_ocr_items([
+            "Encoder",
+            "Decoder",
+            "Multi-Head Deformable",
+            "Self-Attention",
+            "Cross-Attention",
+            "Add & Norm",
+            "BC-FFN",
+            "GN",
+            "GELU",
+            "Location-guided queries",
+            "Feature Grids",
+            "Restore",
+            "T3-T5",
+            "Flatten",
+        ]),
+    )
+
+    scene = image_auto_scene.build_scene(source, allow_raster_tiles=False, reconstruction_mode="standard")
+    texts = "\n".join(str(node.get("text", "")) for node in scene["nodes"])
+    node_types = [node.get("type") for node in scene["nodes"]]
+
+    assert scene["metadata"]["created_by"] == "fig4visio.image_auto_scene.deformable_transformer_encoder_decoder"
+    assert scene["metadata"]["architecture_template"] == "deformable_transformer_encoder_decoder"
+    assert scene["metadata"]["raster_tile_policy"] == "semantic_template_no_raster_tiles"
+    assert scene["assets"] == []
+    assert all(node.get("type") != "image_tile" for node in scene["nodes"])
+    assert node_types.count("group_container") >= 4
+    assert all(
+        node.get("style", {}).get("fill") == "#F0F0F0"
+        for node in scene["nodes"]
+        if node.get("type") == "group_container"
+    )
+    assert node_types.count("grid_matrix") >= 2
+    assert node_types.count("tensor_stack") >= 2
+    assert node_types.count("feature_vector_stack") >= 2
+    assert node_types.count("operator_node") >= 8
+    assert "Encoder" in texts
+    assert "Decoder" in texts
+    assert "BC-FFN" in texts
+    assert "Location-guided queries" in texts
+    assert "Feature" in texts and "Grids" in texts
+    assert len(scene["edges"]) >= 35
+
+
 def test_self_check_rejects_missing_main_pipeline(tmp_path: Path) -> None:
     source = tmp_path / "source_swin.png"
     bad = tmp_path / "bad_swin.png"

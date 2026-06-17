@@ -1414,6 +1414,449 @@ def is_channel_attention_recalibration_figure(ocr_items: list[dict[str, Any]], w
     return 1.70 <= aspect <= 3.20 and has_scale and vector_mentions >= 1 and signal_count >= 4
 
 
+def is_deformable_transformer_encoder_decoder_figure(ocr_items: list[dict[str, Any]], width: int, height: int) -> bool:
+    corpus = ocr_corpus(ocr_items).lower()
+    folded = corpus.replace("\u00d7", "x").replace("&", "and")
+    compact = re.sub(r"[^a-z0-9]+", "", folded)
+    aspect = width / max(1, height)
+    has_encoder_decoder = "encoder" in compact and "decoder" in compact
+    has_deformable = "deformable" in compact or "deformabl" in compact
+    has_attention = ("selfattention" in compact or "crossattention" in compact) and "multihead" in compact
+    has_ffn = "bcffn" in compact or ("ffn" in compact and "gn" in compact and "gelu" in compact)
+    has_norm = "addnorm" in compact or ("add" in compact and "norm" in compact)
+    has_feature_grids = "featuregrids" in compact or ("feature" in compact and "grids" in compact)
+    has_queries = "locationguidedqueries" in compact or ("queries" in compact and "location" in compact)
+    has_restore = "restore" in compact or "flatten" in compact or "t3t5" in compact or "t375" in compact
+    signal_count = sum(
+        bool(flag)
+        for flag in (
+            has_encoder_decoder,
+            has_deformable,
+            has_attention,
+            has_ffn,
+            has_norm,
+            has_feature_grids,
+            has_queries,
+            has_restore,
+        )
+    )
+    return 1.45 <= aspect <= 2.45 and signal_count >= 6 and has_encoder_decoder and has_deformable and has_ffn
+
+
+def build_deformable_transformer_encoder_decoder_scene(
+    image_path: Path,
+    width: int,
+    height: int,
+    ocr_items: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    base_w = 981.0
+    base_h = 524.0
+
+    def sx(value: float) -> float:
+        return value * width / base_w
+
+    def sy(value: float) -> float:
+        return value * height / base_h
+
+    def bbox(x: float, y: float, w: float, h: float) -> list[float]:
+        return [round(sx(x), 2), round(sy(y), 2), round(sx(x + w), 2), round(sy(y + h), 2)]
+
+    def attach(node: dict[str, Any], x: float, y: float, w: float, h: float, container_id: str | None = None) -> dict[str, Any]:
+        node["source_bbox_px"] = bbox(x, y, w, h)
+        if container_id:
+            node["container_id"] = container_id
+        return node
+
+    def page_node() -> dict[str, Any]:
+        return px_node("page_background", "page_background", 0, 0, width, height, "", fill="#FFFFFF", line="none", z=0)
+
+    def container(node_id: str, x: float, y: float, w: float, h: float, text: str = "") -> dict[str, Any]:
+        item = px_node(node_id, "group_container", sx(x), sy(y), sx(w), sy(h), text, fill="#F0F0F0", line="#111111", z=4, font_size=11, text_color="#111111", dash="dash", rounding=0.12)
+        item["style"].update({"fill": "#F0F0F0", "line_dash": "dash", "line_weight_pt": 1.25, "font_weight": "bold"})
+        return attach(item, x, y, w, h)
+
+    def label(node_id: str, x: float, y: float, w: float, h: float, text: str, *, container_id: str | None = None, font_size: float = 10, weight: str = "regular", italic: bool = False, color: str = "#111111", angle: float | None = None, z: int = 90) -> dict[str, Any]:
+        item = text_node(node_id, sx(x), sy(y), sx(w), sy(h), text, font_size=font_size, weight=weight, angle=angle, z=z)
+        item["style"].update(
+            {
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria", "Microsoft YaHei UI"],
+                "font_role": "math" if italic else "paper_serif",
+                "text_color": color,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.5,
+            }
+        )
+        if italic:
+            item["style"]["font_italic"] = True
+        return attach(item, x, y, w, h, container_id)
+
+    def math_label(node_id: str, x: float, y: float, w: float, h: float, text: str, *, container_id: str | None = None, font_size: float = 9.5, z: int = 91) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "math_text",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": text,
+            "font_size_pt": font_size,
+            "math_render_mode": "fragments",
+            "style": {
+                "fill": "none",
+                "line": "none",
+                "text_color": "#111111",
+                "font_family_candidates": ["Times New Roman", "Cambria Math", "Cambria"],
+                "font_role": "math",
+                "font_italic": True,
+                "font_size_pt": font_size,
+                "text_fit": "math_label",
+                "min_font_size_pt": 4.5,
+                "text_margin_in": 0.0,
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def box(node_id: str, x: float, y: float, w: float, h: float, text: str, *, container_id: str | None = None, fill: str = "#FFFFFF", line: str = "#111111", font_size: float = 9, angle: float | None = None, z: int = 30, rounded: bool = False, allow_overlap: bool = False) -> dict[str, Any]:
+        item = px_node(node_id, "rounded_process" if rounded else "process_box", sx(x), sy(y), sx(w), sy(h), text, fill=fill, line=line, z=z, font_size=font_size, text_color="#111111", text_angle=angle, rounding=0.05 if rounded else 0.0)
+        item["style"].update(
+            {
+                "line_weight_pt": 1.0,
+                "font_family_candidates": ["Times New Roman", "Cambria", "Microsoft YaHei UI"],
+                "font_size_pt": font_size,
+                "text_fit": "shrink_to_fit",
+                "min_font_size_pt": 4.5,
+            }
+        )
+        if allow_overlap:
+            item["allow_overlap"] = True
+        return attach(item, x, y, w, h, container_id)
+
+    def op(node_id: str, cx: float, cy: float, size: float, symbol: str = "+", *, container_id: str | None = None, z: int = 65) -> dict[str, Any]:
+        item = px_node(node_id, "operator_node", sx(cx - size / 2), sy(cy - size / 2), sx(size), sy(size), symbol, fill="#FFFFFF", line="#111111", z=z, font_size=9, text_color="#111111")
+        item["symbol"] = symbol
+        item["operator_shape"] = "circle"
+        item["style"].update({"line_weight_pt": 1.0, "font_size_pt": 9, "font_family": "Times New Roman"})
+        return attach(item, cx - size / 2, cy - size / 2, size, size, container_id)
+
+    def pos_token(node_id: str, cx: float, cy: float, *, container_id: str | None = None, z: int = 63) -> list[dict[str, Any]]:
+        size = 18
+        token = px_node(node_id, "ellipse_node", sx(cx - size / 2), sy(cy - size / 2), sx(size), sy(size), "", fill="#F7D955", line="#111111", z=z, font_size=1, text_color="#111111")
+        token["style"].update({"line_weight_pt": 1.0})
+        return [attach(token, cx - size / 2, cy - size / 2, size, size, container_id)]
+
+    def pos_icon(node_id: str, cx: float, cy: float, *, container_id: str | None = None, z: int = 63) -> dict[str, Any]:
+        return pos_token(node_id, cx, cy, container_id=container_id, z=z)[0]
+
+    def tensor_stack(node_id: str, x: float, y: float, w: float, h: float, *, container_id: str | None = None, fill: str = "#E6E6E6", layers: int = 4, z: int = 32) -> dict[str, Any]:
+        item = {
+            "id": node_id,
+            "type": "tensor_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "layers": layers,
+            "stack_render_mode": "slanted_sheets",
+            "layer_dx_in": 3.0,
+            "layer_dy_in": -4.0,
+            "skew_x_in": 10.0,
+            "style": {
+                "fill": fill,
+                "side_fill": "#C8C8C8",
+                "top_fill": "#F4F4F4",
+                "line": "#111111",
+                "line_weight_pt": 0.85,
+            },
+        }
+        return attach(item, x, y - 12, w + 44, h + 24, container_id)
+
+    def feature_grid(node_id: str, x: float, y: float, w: float, h: float, *, container_id: str | None = None, z: int = 34) -> dict[str, Any]:
+        cells = []
+        for row in range(5):
+            for col in range(5):
+                fill = "#F5E8FF" if (row + col) % 2 else "#E2C8F5"
+                cells.append([row, col, fill])
+        item = {
+            "id": node_id,
+            "type": "grid_matrix",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "rows": 5,
+            "cols": 5,
+            "colored_cells": cells,
+            "style": {"cell_fill": "#F5E8FF", "grid_line": "#8A6AA3", "grid_line_weight_pt": 0.75, "line": "#8A6AA3", "line_weight_pt": 0.75},
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def query_stack(node_id: str, x: float, y: float, w: float, h: float, *, container_id: str | None = None, z: int = 38) -> dict[str, Any]:
+        fills = ["#DDF2D4", "#CBE9C1", "#9FD18D", "#4F8F38", "#FFFFFF", "#DDF2D4", "#CBE9C1", "#4F8F38"]
+        item = {
+            "id": node_id,
+            "type": "feature_vector_stack",
+            "x": sx(x),
+            "y": sy(y),
+            "w": sx(w),
+            "h": sy(h),
+            "z": z,
+            "text": "",
+            "orientation": "vertical",
+            "count": len(fills),
+            "cell_gap_in": 1.3,
+            "cell_fills": fills,
+            "outline": True,
+            "style": {
+                "cell_line": "#111111",
+                "cell_line_weight_pt": 0.8,
+                "line": "#111111",
+                "line_weight_pt": 1.0,
+                "cell_fill": "#DDF2D4",
+            },
+        }
+        return attach(item, x, y, w, h, container_id)
+
+    def edge(edge_id: str, x1: float, y1: float, x2: float, y2: float, *, route: str = "straight", arrow: bool = True, points: list[list[float]] | None = None, z: int = 70, allow_diagonal: bool = False, allow_cross_container: bool = False, allow_direct_cross_container: bool = False, allow_text_overlap: bool = False) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "id": edge_id,
+            "type": "lane_arrow" if route in {"horizontal", "vertical"} and arrow else ("arrow_connector" if arrow else "line_segment"),
+            "from_point": [sx(x1), sy(y1)],
+            "to_point": [sx(x2), sy(y2)],
+            "route": route,
+            "z": z,
+            "style": {"line": "#111111", "line_weight_pt": 1.05, "end_arrow": "triangle" if arrow else "none", "arrow_size": "small"},
+        }
+        if points:
+            item["points"] = [[sx(px), sy(py)] for px, py in points]
+            item["orthogonalize_points"] = route in {"orthogonal", "hv", "vh"}
+        if allow_diagonal:
+            item["allow_diagonal"] = True
+        if allow_cross_container:
+            item["allow_cross_container"] = True
+        if allow_direct_cross_container:
+            item["allow_direct_cross_container"] = True
+        if allow_text_overlap:
+            item["allow_text_overlap"] = True
+        return item
+
+    nodes: list[dict[str, Any]] = [page_node()]
+    edges: list[dict[str, Any]] = []
+
+    nodes.extend(
+        [
+            label("original_word", 0, 116, 91, 27, "Original", font_size=19, weight="bold", color="#79CFD0"),
+            label("image_word", 8, 144, 72, 31, "image", font_size=19, weight="bold", color="#79CFD0"),
+        ]
+    )
+
+    def add_encoder(prefix: str, x: float, y: float, w: float, h: float, *, input_x: float, input_y: float) -> tuple[float, float]:
+        cid = f"{prefix}_encoder"
+        nodes.append(container(cid, x, y, w, h))
+        nodes.extend(
+            [
+                label(f"{prefix}_encoder_title", x + w - 98, y + 14, 70, 17, "Encoder", container_id=cid, font_size=10, weight="bold"),
+                label(f"{prefix}_encoder_mx", x + w - 38, y + 30, 30, 16, "Mx", container_id=cid, font_size=8),
+                op(f"{prefix}_input_add", x + 20, y + h * 0.56, 22, container_id=cid),
+                box(f"{prefix}_self_attention", x + 63, y + 18, 44, h - 44, "Multi-Head Deformable\nSelf-Attention", container_id=cid, font_size=8.5, angle=90, rounded=True),
+                box(f"{prefix}_add_norm", x + 116, y + 50, 28, h - 92, "Add & Norm", container_id=cid, font_size=8.5, angle=90, rounded=True),
+                box(f"{prefix}_bc_frame", x + 148, y + 62, 154, h - 102, "", container_id=cid, fill="#EAF3F9", line="#111111", rounded=True, z=24, allow_overlap=True),
+                label(f"{prefix}_bc_title", x + 203, y + 66, 62, 16, "BC-FFN", container_id=cid, font_size=9.5, weight="bold"),
+                box(f"{prefix}_conv1", x + 170, y + 82, 22, h - 132, "3x3\nConv", container_id=cid, font_size=7, angle=90, allow_overlap=True),
+                box(f"{prefix}_gn", x + 204, y + 92, 20, h - 150, "GN", container_id=cid, font_size=8, angle=90, allow_overlap=True),
+                box(f"{prefix}_gelu", x + 235, y + 87, 22, h - 142, "GELU", container_id=cid, font_size=7, angle=90, allow_overlap=True),
+                box(f"{prefix}_conv2", x + 268, y + 82, 24, h - 132, "3x3\nConv", container_id=cid, font_size=7, angle=90, allow_overlap=True),
+                math_label(f"{prefix}_xm", input_x - 30, input_y - 29, 38, 16, "X_m", font_size=9.5),
+                math_label(f"{prefix}_xb", x + 145, y + h * 0.54 - 32, 34, 16, "X_b", container_id=cid, font_size=8.5),
+                math_label(f"{prefix}_xbp", x + 290, y + h * 0.54 - 32, 38, 16, "X'_b", container_id=cid, font_size=8.5),
+                math_label(f"{prefix}_xe", x + w + 10, y + h * 0.54 - 32, 32, 16, "X_e", font_size=8.5),
+                label(f"{prefix}_vkq_v", x + 48, y + 37, 14, 12, "v", container_id=cid, font_size=8, italic=True),
+                label(f"{prefix}_vkq_k", x + 45, y + 91, 14, 12, "k", container_id=cid, font_size=8, italic=True),
+                label(f"{prefix}_vkq_q", x + 45, y + 145, 14, 12, "q", container_id=cid, font_size=8, italic=True),
+            ]
+        )
+        nodes.extend(pos_token(f"{prefix}_pm", x + 19, y + h - 30, container_id=cid))
+        edges.extend(
+            [
+                edge(f"{prefix}_input_to_add", input_x, input_y, x + 9, y + h * 0.56, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+                edge(f"{prefix}_add_to_attention", x + 31, y + h * 0.56, x + 63, y + h * 0.56, route="horizontal"),
+                edge(f"{prefix}_attention_to_norm", x + 107, y + h * 0.56, x + 116, y + h * 0.56, route="horizontal"),
+                edge(f"{prefix}_norm_to_bc", x + 144, y + h * 0.56, x + 170, y + h * 0.56, route="horizontal"),
+                edge(f"{prefix}_bc_to_output", x + 302, y + h * 0.56, x + w + 4, y + h * 0.56, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+                edge(f"{prefix}_pm_to_add", x + 19, y + h - 39, x + 19, y + h * 0.56 + 11, route="vertical", arrow=False),
+                edge(f"{prefix}_residual_top", x + 31, y + 18, x + 132, y + 18, route="horizontal", arrow=False),
+                edge(f"{prefix}_residual_down", x + 132, y + 18, x + 132, y + 50, route="vertical"),
+            ]
+        )
+        return x + w + 20, y + h * 0.56
+
+    def add_feature_bridge(prefix: str, x: float, y: float, *, top_lane: bool) -> tuple[float, float]:
+        cid = f"{prefix}_feature_bridge"
+        nodes.append(attach(px_node(cid, "audit_region", sx(x), sy(y), sx(150), sy(205), "", fill="#FFFFFF", line="none", z=1, font_size=1, text_color="#111111"), x, y, 150, 205))
+        nodes[-1]["style"].update({"fill": "none", "line": "none"})
+        nodes.extend(
+            [
+                label(f"{prefix}_restore", x + 2, y + 6, 58, 17, "Restore", container_id=cid, font_size=8.5),
+                tensor_stack(f"{prefix}_restore_stack", x + 48, y + 24, 70, 28, container_id=cid, layers=4),
+                label(f"{prefix}_t3t5", x + 58, y + 66, 46, 16, "T3-T5", container_id=cid, font_size=8.5, italic=True),
+                label(f"{prefix}_resize", x + 88, y + 91, 42, 16, "Resize", container_id=cid, font_size=7.5, angle=90),
+                label(f"{prefix}_sxs", x + 38, y + 114, 38, 16, "SxS", container_id=cid, font_size=8.5),
+                label(f"{prefix}_feature", x + 18, y + 139, 56, 17, "Feature", container_id=cid, font_size=8.5),
+                label(f"{prefix}_grids", x + 25, y + 157, 44, 17, "Grids", container_id=cid, font_size=8.5),
+                feature_grid(f"{prefix}_feature_grid", x + 70, y + 124, 60, 48, container_id=cid),
+                box(f"{prefix}_flatten", x + 122, y + 106, 50, 48, "Flatten", container_id=cid, font_size=8.5),
+            ]
+        )
+        edges.extend(
+            [
+                edge(f"{prefix}_restore_to_stack", x + 2, y + 20, x + 48, y + 38, route="straight", allow_diagonal=True),
+                edge(f"{prefix}_stack_down", x + 86, y + 54, x + 86, y + 124, route="vertical"),
+                edge(f"{prefix}_grid_to_flatten", x + 130, y + 148, x + 122, y + 130, route="horizontal"),
+            ]
+        )
+        return x + 172, y + 130
+
+    def add_decoder(prefix: str, x: float, y: float, w: float, h: float, *, input_y: float, output_label: str) -> None:
+        cid = f"{prefix}_decoder"
+        nodes.append(container(cid, x, y, w, h))
+        nodes.extend(
+            [
+                label(f"{prefix}_decoder_title", x + w - 98, y + 12, 70, 17, "Decoder", container_id=cid, font_size=10, weight="bold"),
+                label(f"{prefix}_decoder_mx", x + w - 39, y + 29, 30, 16, "Mx", container_id=cid, font_size=8),
+                query_stack(f"{prefix}_queries", x + 15, y + 45, 31, h - 72, container_id=cid),
+                label(f"{prefix}_query_label", x + 49, y + 54, 20, h - 88, "Location-guided queries", container_id=cid, font_size=8.3, angle=90),
+                op(f"{prefix}_ps_add", x + 83, y + 113, 22, container_id=cid),
+                op(f"{prefix}_pm_add", x + 112, y + 18, 20, container_id=cid),
+                box(f"{prefix}_cross_attention", x + 135, y + 42, 45, h - 82, "Multi-Head Deformable\nCross-Attention", container_id=cid, font_size=8.2, angle=90, rounded=True),
+                box(f"{prefix}_dec_norm", x + 197, y + 70, 31, h - 112, "Add & Norm", container_id=cid, font_size=8.5, angle=90, rounded=True),
+                box(f"{prefix}_dec_bcffn", x + 244, y + 66, 31, h - 106, "BC-FFN", container_id=cid, fill="#EAF3F9", font_size=8, angle=90, rounded=True),
+                math_label(f"{prefix}_ps", x + 70, y + 45, 24, 16, "P_s", container_id=cid, font_size=8.5),
+                math_label(f"{prefix}_pm_label", x + 128, y + 16, 28, 16, "P_m", container_id=cid, font_size=8.5),
+                math_label(f"{prefix}_q_l", x + 25, y + h - 35, 30, 16, "Q_L", container_id=cid, font_size=8.5),
+                label(f"{prefix}_v", x + 119, y + 64, 14, 12, "v", container_id=cid, font_size=8, italic=True),
+                label(f"{prefix}_k", x + 119, y + 112, 14, 12, "k", container_id=cid, font_size=8, italic=True),
+                label(f"{prefix}_q", x + 119, y + 159, 14, 12, "q", container_id=cid, font_size=8, italic=True),
+                math_label(f"{prefix}_xd", x + w + 7, input_y - 10, 36, 18, output_label, font_size=8.5),
+            ]
+        )
+        nodes.extend(pos_token(f"{prefix}_ps_token", x + 91, y + 54, container_id=cid))
+        nodes.extend(pos_token(f"{prefix}_pm_token", x + 158, y + 20, container_id=cid))
+        edges.extend(
+            [
+                edge(f"{prefix}_flat_to_queries", x - 20, input_y, x + 15, input_y, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+                edge(f"{prefix}_queries_to_ps", x + 46, y + 113, x + 72, y + 113, route="horizontal"),
+                edge(f"{prefix}_ps_to_attention", x + 105, y + 113, x + 135, y + 113, route="horizontal"),
+                edge(f"{prefix}_pm_to_attention", x + 122, y + 28, x + 135, y + 65, route="straight", allow_diagonal=True),
+                edge(f"{prefix}_dec_attention_to_norm", x + 180, y + 113, x + 197, y + 113, route="horizontal"),
+                edge(f"{prefix}_norm_to_bcffn", x + 228, y + 113, x + 244, y + 113, route="horizontal"),
+                edge(f"{prefix}_bcffn_to_out", x + 275, y + 113, x + w + 1, y + 113, route="horizontal"),
+                edge(f"{prefix}_bottom_skip", x + 46, y + h - 20, x + 212, y + h - 20, route="horizontal", arrow=False),
+                edge(f"{prefix}_skip_up", x + 212, y + h - 20, x + 212, y + 70, route="vertical"),
+            ]
+        )
+
+    # Top row
+    top_enc_out_x, top_enc_out_y = add_encoder("top", 151, 28, 322, 198, input_x=93, input_y=139)
+    top_bridge_x, top_bridge_y = add_feature_bridge("top", 495, 28, top_lane=True)
+    add_decoder("top", 652, 38, 287, 190, input_y=top_bridge_y, output_label="X_d")
+    edges.extend(
+        [
+            edge("top_encoder_to_bridge", top_enc_out_x - 20, top_enc_out_y, 495, top_enc_out_y, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+            edge("top_bridge_to_decoder", top_bridge_x, top_bridge_y, 652, top_bridge_y, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+            edge("top_restore_to_decoder_add", 545, 28, 765, 28, route="orthogonal", points=[[545, 28], [765, 28], [765, 47]], allow_cross_container=True, allow_direct_cross_container=True),
+        ]
+    )
+
+    # Bottom row
+    bottom_enc_out_x, bottom_enc_out_y = add_encoder("bottom", 116, 284, 342, 194, input_x=82, input_y=375)
+    bottom_bridge_x, bottom_bridge_y = add_feature_bridge("bottom", 482, 270, top_lane=False)
+    add_decoder("bottom", 643, 283, 303, 197, input_y=bottom_bridge_y, output_label="X_d")
+    edges.extend(
+        [
+            edge("bottom_encoder_to_bridge", bottom_enc_out_x - 20, bottom_enc_out_y, 482, bottom_enc_out_y, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+            edge("bottom_bridge_to_decoder", bottom_bridge_x, bottom_bridge_y, 643, bottom_bridge_y, route="horizontal", allow_cross_container=True, allow_direct_cross_container=True),
+            edge("bottom_restore_to_decoder_add", 530, 270, 744, 270, route="orthogonal", points=[[530, 270], [744, 270], [744, 292]], allow_cross_container=True, allow_direct_cross_container=True),
+        ]
+    )
+
+    # Legends, kept editable and repeated because the source shows them in both halves.
+    def add_legend(prefix: str, x: float, y: float) -> None:
+        nodes.extend(
+            [
+                pos_icon(f"{prefix}_legend_pos_icon", x, y + 8, z=62),
+                label(f"{prefix}_legend_pos", x + 17, y, 120, 18, "Position encoding", font_size=8.5),
+                op(f"{prefix}_legend_add_icon", x + 150, y + 8, 18, z=62),
+                label(f"{prefix}_legend_add", x + 168, y, 34, 18, "Add", font_size=8.5),
+                box(f"{prefix}_legend_conv_icon", x + 220, y - 1, 63, 22, "3x3 Conv", font_size=8),
+                label(f"{prefix}_legend_conv", x + 290, y, 112, 18, "Convolution layer", font_size=8.5),
+            ]
+        )
+
+    add_legend("top", 136, 240)
+    add_legend("bottom", 125, 499)
+
+    return {
+        "version": "0.1",
+        "metadata": {
+            "title": title or image_path.stem,
+            "created_by": "fig4visio.image_auto_scene.deformable_transformer_encoder_decoder",
+            "style_profile": "paper_white",
+            "fidelity": "semantic_editable_rebuild",
+            "source_image": str(image_path.resolve()),
+            "ocr_items": len(ocr_items),
+            "region_strategy": "module_first",
+            "architecture_template": "deformable_transformer_encoder_decoder",
+            "visual_reference_layer": False,
+            "raster_tile_policy": "semantic_template_no_raster_tiles",
+            "partial_raster_tiles": 0,
+            "source_visual_inventory": {
+                "analysis_basis": "ocr_keyword_triggered_transformer_encoder_decoder_template",
+                "diagram_family": "deformable_transformer_encoder_decoder_with_feature_grids",
+                "do_not_translate": True,
+                "unknown_text_policy": "preserve_visible_labels_mark_unreadable_do_not_invent",
+                "regions": [
+                    {"id": "top_encoder", "category": "encoder", "source_bbox_px": [151, 28, 473, 226]},
+                    {"id": "top_feature_bridge", "category": "feature_grid_bridge", "source_bbox_px": [495, 28, 645, 233]},
+                    {"id": "top_decoder", "category": "decoder", "source_bbox_px": [652, 38, 939, 228]},
+                    {"id": "bottom_encoder", "category": "encoder", "source_bbox_px": [116, 284, 458, 478]},
+                    {"id": "bottom_feature_bridge", "category": "feature_grid_bridge", "source_bbox_px": [482, 270, 632, 490]},
+                    {"id": "bottom_decoder", "category": "decoder", "source_bbox_px": [643, 283, 946, 480]},
+                ],
+            },
+            "region_plan": [
+                {"id": "top_encoder", "category": "encoder", "source_bbox_px": [151, 28, 473, 226]},
+                {"id": "top_feature_bridge", "category": "feature_grid_bridge", "source_bbox_px": [495, 28, 645, 233]},
+                {"id": "top_decoder", "category": "decoder", "source_bbox_px": [652, 38, 939, 228]},
+                {"id": "bottom_encoder", "category": "encoder", "source_bbox_px": [116, 284, 458, 478]},
+                {"id": "bottom_feature_bridge", "category": "feature_grid_bridge", "source_bbox_px": [482, 270, 632, 490]},
+                {"id": "bottom_decoder", "category": "decoder", "source_bbox_px": [643, 283, 946, 480]},
+            ],
+            "notes": [
+                "Editable semantic reconstruction for deformable-transformer encoder/decoder figures.",
+                "Dashed Encoder/Decoder regions, attention blocks, Add & Norm, BC-FFN internals, feature grids, restore stacks, location-guided query stacks, operators, labels, and connectors are Visio-editable components.",
+                "No original image, local tile, or raster reference layer is embedded.",
+            ],
+        },
+        "page": {
+            "width": width,
+            "height": height,
+            "units": "px",
+            "origin": "top-left",
+            "target_width_in": TARGET_WIDTH_IN,
+            "background": "#FFFFFF",
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "assets": [],
+    }
+
+
 def build_channel_attention_recalibration_scene(
     image_path: Path,
     width: int,
@@ -4081,6 +4524,11 @@ def build_scene(
     height, width = image.shape[:2]
     ocr_items = run_ocr(image_path)
     mode = str(reconstruction_mode or "standard").strip().lower()
+    if is_deformable_transformer_encoder_decoder_figure(ocr_items, width, height):
+        scene = build_deformable_transformer_encoder_decoder_scene(image_path, width, height, ocr_items, title=title)
+        scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
+        scene.setdefault("metadata", {})["reconstruction_mode"] = mode
+        return scene
     if is_channel_attention_recalibration_figure(ocr_items, width, height):
         scene = build_channel_attention_recalibration_scene(image_path, width, height, ocr_items, title=title)
         scene.setdefault("metadata", {})["raster_tile_policy"] = "semantic_template_no_raster_tiles"
